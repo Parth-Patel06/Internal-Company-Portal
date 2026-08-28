@@ -1,0 +1,78 @@
+
+1. Clone the repository
+
+git clone https://github.com/YOUR-USERNAME/Internal-Company-Portal.git
+cd Internal-Company-Portal
+
+
+2. Create PostgreSQL database
+
+CREATE DATABASE triobyte_portal1;
+
+
+3. Backend setup
+
+cd backend
+npm install
+
+Create backend/.env:
+
+PORT=8000
+DATABASE_URL=postgres://postgres:YOUR_POSTGRES_PASSWORD@localhost:5432/triobyte_portal1
+JWT_SECRET=your_long_random_secret
+
+
+4. Initialize database
+
+npm run init-db
+
+
+5. Load demo data
+
+npm run seed
+
+
+6. Start backend
+
+npm run dev
+
+Backend:
+http://localhost:8000
+
+
+7. Open a NEW terminal
+
+cd Internal-Company-Portal/frontend
+npm install
+npm run dev
+
+
+8. Open the frontend URL shown by Vite.
+
+Usually:
+http://localhost:5173
+
+
+DEMO LOGIN
+==========
+
+CEO:
+ceo@triobyte.demo
+
+Admin:
+admin@triobyte.demo
+
+HR:
+hr@triobyte.demo
+
+Employee:
+employee@triobyte.demo
+
+Employee:
+neha@triobyte.demo
+
+Intern:
+intern@triobyte.demo
+
+Password for demo accounts:
+Demo@123
