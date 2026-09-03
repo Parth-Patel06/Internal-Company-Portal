@@ -31,21 +31,30 @@ async function auth(req, res, next) {
         employee_level,
         mobile,
         address,
+        photo_url,
         joining_date,
         end_date,
         employment_type,
         assigned_mentor,
         must_change_password,
-        blocked
+        blocked,
+        employment_status,
+        email_status
       FROM users
       WHERE id = $1`,
       [data.id]
     );
 
-    if (!rows[0] || rows[0].blocked) {
-      return res.status(403).json({
-        message: "Account unavailable",
-      });
+    if (!rows[0]) {
+      return res.status(403).json({ message: "Account unavailable" });
+    }
+
+    if (rows[0].blocked === true) {
+      return res.status(403).json({ message: "Account is blocked" });
+    }
+
+    if (String(rows[0].employment_status || "Active").toUpperCase() !== "ACTIVE") {
+      return res.status(403).json({ message: "Account is not active" });
     }
 
     req.user = rows[0];

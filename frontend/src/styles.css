@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+
 /* ================================
    GLOBAL
 ================================ */
@@ -2206,11 +2208,12 @@ button:disabled {
   --tb-blue: #2563eb;
   --tb-blue-deep: #1749b8;
   --tb-orange: #f59e0b;
+  --tb-brand: #1e3a5f;
   --radius-card: 22px;
   --radius-control: 12px;
 }
 body[data-theme="light"] { --bg:#f6f8fc; --sidebar:#fff; --header:rgba(255,255,255,.84); --card:#fff; --input:#f7f9fd; --detail:#f2f5fa; --border:#e4e9f2; --border-soft:#d9e1ec; --text:#152238; --muted:#718096; --primary:#2563eb; --primary-hover:#1749b8; --nav-hover:#f0f4fb; --nav-active:#eaf1ff; }
-body[data-theme="dark"] { --bg:#0b1220; --sidebar:#101a2c; --header:rgba(11,18,32,.84); --card:#121e31; --input:#0d1728; --detail:#17243a; --border:#23344e; --border-soft:#2c3e58; --text:#eef4ff; --muted:#92a1b8; --primary:#4f83ff; --primary-hover:#77a0ff; --nav-hover:#182943; --nav-active:#1d3151; }
+body[data-theme="dark"] { --tb-brand:#9ec5ff; --bg:#0b1220; --sidebar:#101a2c; --header:rgba(11,18,32,.84); --card:#121e31; --input:#0d1728; --detail:#17243a; --border:#23344e; --border-soft:#2c3e58; --text:#eef4ff; --muted:#92a1b8; --primary:#4f83ff; --primary-hover:#77a0ff; --nav-hover:#182943; --nav-active:#1d3151; }
 body[data-theme="accent"] { --bg:#fffaf3; --sidebar:#15294a; --header:rgba(255,255,255,.88); --card:#fff; --input:#fffdf9; --detail:#fff5e6; --border:#f0dfc5; --border-soft:#e8d3b3; --text:#1b2940; --muted:#7c8797; --primary:#2563eb; --primary-hover:#1749b8; --nav-hover:#233b63; --nav-active:#2a4a7b; }
 body { letter-spacing:-.01em; }
 .app { min-height:100vh; }
@@ -2237,7 +2240,7 @@ header > span { display:flex; gap:9px; align-items:center; color:var(--muted); f
 .themeQuickSwitch button { width:29px; height:29px; border:0; border-radius:8px; display:grid; place-items:center; background:transparent; color:var(--muted); cursor:pointer; }
 .themeQuickSwitch button.active { background:var(--card); color:var(--primary); box-shadow:0 2px 8px rgba(0,0,0,.08); }
 .content { max-width:1360px; padding:38px 42px 80px; }
-.eyebrow { color:var(--tb-orange); font-size:11px; letter-spacing:.18em; }
+.eyebrow { color:var(--tb-brand); font-size:11px; letter-spacing:.18em; }
 .content h1 { font-size:clamp(30px,3vw,42px); letter-spacing:-.045em; margin-bottom:30px; }
 .card { border-radius:var(--radius-card); border-color:var(--border); box-shadow:0 12px 35px rgba(30,50,80,.055); }
 .grid { gap:20px; }
@@ -2725,5 +2728,1218 @@ aside .brandTagline {
   aside .brandText,
   .sidebarCollapsed aside .brandText {
     display: flex !important;
+  }
+}
+
+
+/* Salary workflow */
+.salaryList { display:grid; gap:18px; }
+.salaryCard { padding:22px; }
+.salaryCardHead { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:16px; }
+.salaryCardHead h3 { margin:0 0 4px; }
+.salaryCardHead small { color:var(--muted,#64748b); }
+.salaryGrid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+.salaryMetric { padding:12px; border:1px solid var(--border,#dbe3ef); border-radius:12px; background:var(--surface-soft,#f6f8fc); }
+.salaryMetric span { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted,#64748b); margin-bottom:5px; }
+.salaryMetric b { font-size:15px; }
+.salaryAudit { display:flex; flex-wrap:wrap; gap:12px 22px; border-top:1px solid var(--border,#dbe3ef); margin-top:16px; padding-top:14px; font-size:12px; color:var(--muted,#64748b); }
+.salaryActions { margin-top:16px; }
+.statusBadge { padding:7px 11px; border-radius:999px; font-size:12px; font-weight:700; white-space:nowrap; background:#eef2f7; }
+.statusBadge.processed { background:#e0f2e9; color:#087443; }
+.statusBadge.reviewed { background:#fff4d9; color:#8a5b00; }
+.statusBadge.pending-review { background:#eef3ff; color:#2454a6; }
+@media (max-width:900px){ .salaryGrid{grid-template-columns:repeat(2,minmax(0,1fr));} }
+
+/* =========================================================
+   EMPLOYEE BLOCK + OFFBOARDING MODAL
+   Theme-safe version
+========================================================= */
+
+.portalModal {
+  box-sizing: border-box;
+  width: min(560px, calc(100vw - 32px));
+  max-width: 560px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  background: var(--card) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+
+/* Offboarding heading */
+.portalModal > h2 {
+  margin: 0;
+  padding: 22px 24px 18px;
+  color: var(--text) !important;
+  font-size: 22px;
+  line-height: 1.25;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Employee information */
+.portalModal > .detailGrid {
+  margin: 0;
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
+  box-shadow: none;
+  width: 100%;
+  box-sizing: border-box;
+
+  background: var(--detail) !important;
+  color: var(--text) !important;
+}
+
+.portalModal > .detailGrid *,
+.portalModal > .detailGrid strong,
+.portalModal > .detailGrid span,
+.portalModal > .detailGrid b {
+  color: inherit;
+}
+
+/* Offboarding fields */
+.portalModal > .modalField {
+  display: flex;
+  width: auto;
+  margin: 18px 24px 0;
+  box-sizing: border-box;
+
+  color: var(--text) !important;
+}
+
+.portalModal > .modalField label,
+.portalModal > .modalField span {
+  color: var(--text) !important;
+}
+
+.portalModal > .modalField input,
+.portalModal > .modalField select,
+.portalModal > .modalField textarea {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+
+  color: var(--text) !important;
+  background: var(--input) !important;
+  border: 1px solid var(--border) !important;
+}
+
+.portalModal > .modalField input::placeholder,
+.portalModal > .modalField textarea::placeholder {
+  color: var(--muted) !important;
+  opacity: 1;
+}
+
+.portalModal > .modalField select option {
+  background: var(--input);
+  color: var(--text);
+}
+
+/* Warning */
+.portalModal > .warning {
+  margin: 18px 24px !important;
+  box-sizing: border-box;
+}
+
+/* Action row */
+.portalModal > .modalActions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+
+  padding: 18px 24px 22px;
+  margin-top: 18px;
+
+  border-top: 1px solid var(--border);
+}
+
+/* All modal action buttons */
+.portalModal > .modalActions button {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+
+  min-width: 100px !important;
+  min-height: 44px !important;
+
+  padding: 0 20px !important;
+
+  border-radius: 10px !important;
+
+  font-family: inherit !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
+
+  line-height: 1 !important;
+
+  box-sizing: border-box !important;
+  cursor: pointer !important;
+}
+
+/* Primary */
+.portalModal > .modalActions .primary {
+  background: var(--primary) !important;
+  color: #fff !important;
+  border: 1px solid var(--primary) !important;
+}
+
+.portalModal > .modalActions .primary:hover {
+  background: var(--primary-hover) !important;
+  color: #fff !important;
+}
+
+/* Cancel / secondary */
+.portalModal > .modalActions .secondary {
+  background: var(--card) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+}
+
+.portalModal > .modalActions .secondary:hover {
+  background: var(--nav-hover) !important;
+  color: var(--text) !important;
+}
+
+/* Block / danger */
+.portalModal > .modalActions .danger {
+  background: #c83a3a !important;
+  color: #fff !important;
+  border: 1px solid #c83a3a !important;
+
+  box-shadow: 0 2px 5px rgba(15, 23, 42, 0.12) !important;
+}
+
+.portalModal > .modalActions .danger:hover {
+  background: #a92f2f !important;
+  color: #fff !important;
+  border-color: #a92f2f !important;
+}
+
+/* Disabled */
+.portalModal > .modalActions button:disabled {
+  opacity: 0.6 !important;
+  cursor: not-allowed !important;
+}
+
+/* Block confirmation text */
+.portalModal h3 {
+  color: var(--text) !important;
+}
+
+.portalModal p {
+  color: var(--muted) !important;
+}
+
+/* =========================================================
+   DARK MODE — MODAL
+========================================================= */
+
+body[data-theme="dark"] .portalModal {
+  background: var(--card) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+
+body[data-theme="dark"] .portalModal h2,
+body[data-theme="dark"] .portalModal h3,
+body[data-theme="dark"] .portalModal label,
+body[data-theme="dark"] .portalModal strong,
+body[data-theme="dark"] .portalModal b,
+body[data-theme="dark"] .portalModal span {
+  color: var(--text) !important;
+}
+
+body[data-theme="dark"] .portalModal p,
+body[data-theme="dark"] .portalModal small {
+  color: var(--muted) !important;
+}
+
+body[data-theme="dark"] .portalModal input,
+body[data-theme="dark"] .portalModal select,
+body[data-theme="dark"] .portalModal textarea {
+  background: var(--input) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+
+body[data-theme="dark"] .portalModal input::placeholder,
+body[data-theme="dark"] .portalModal textarea::placeholder {
+  color: var(--muted) !important;
+}
+
+/* Dark Cancel button */
+body[data-theme="dark"] .portalModal > .modalActions .secondary {
+  background: var(--card) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+
+/* Dark Block button */
+body[data-theme="dark"] .portalModal > .modalActions .danger {
+  background: #c83a3a !important;
+  color: #ffffff !important;
+  border-color: #c83a3a !important;
+}
+
+/* Dark Primary */
+body[data-theme="dark"] .portalModal > .modalActions .primary {
+  background: var(--primary) !important;
+  color: #ffffff !important;
+  border-color: var(--primary) !important;
+}
+
+/* =========================================================
+   DARK MODE — MAIN APPLICATION TEXT
+========================================================= */
+
+body[data-theme="dark"] .content h1,
+body[data-theme="dark"] .content h2,
+body[data-theme="dark"] .content h3,
+body[data-theme="dark"] .content h4,
+body[data-theme="dark"] .content h5,
+body[data-theme="dark"] .content h6,
+body[data-theme="dark"] .content p,
+body[data-theme="dark"] .content label,
+body[data-theme="dark"] .content td,
+body[data-theme="dark"] .content th,
+body[data-theme="dark"] .content strong,
+body[data-theme="dark"] .content b {
+  color: var(--text);
+}
+
+body[data-theme="dark"] .content small,
+body[data-theme="dark"] .content .muted {
+  color: var(--muted);
+}
+
+body[data-theme="dark"] .content input,
+body[data-theme="dark"] .content select,
+body[data-theme="dark"] .content textarea {
+  color: var(--text);
+  background: var(--input);
+  border-color: var(--border);
+}
+
+body[data-theme="dark"] .content input::placeholder,
+body[data-theme="dark"] .content textarea::placeholder {
+  color: var(--muted);
+}
+
+/* Don't override intentionally colored UI */
+body[data-theme="dark"] .content .primary,
+body[data-theme="dark"] .content .danger,
+body[data-theme="dark"] .content .statusBadge {
+  color: inherit;
+}
+
+/* =========================================================
+   MOBILE
+========================================================= */
+
+@media (max-width: 600px) {
+  .portalModal {
+    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    border-radius: 18px;
+  }
+
+  .portalModal > h2 {
+    padding: 18px;
+    font-size: 20px;
+  }
+
+  .portalModal > .modalField {
+    margin-left: 18px;
+    margin-right: 18px;
+  }
+
+  .portalModal > .warning {
+    margin-left: 18px !important;
+    margin-right: 18px !important;
+  }
+
+  .portalModal > .modalActions {
+    padding: 16px 18px 18px;
+  }
+
+  .portalModal > .modalActions button {
+    flex: 1;
+  }
+}
+
+/* ==================== PHASE 1 CHAT ==================== */
+/* Clean, compact messenger layout */
+.chatShell{
+  display:grid;
+  grid-template-columns:300px minmax(0,1fr);
+  height:calc(100vh - 128px);
+  min-height:620px;
+  border:1px solid var(--border);
+  border-radius:18px;
+  overflow:hidden;
+  background:var(--card);
+  box-shadow:0 10px 28px rgba(15,23,42,.06);
+}
+
+.chatSidebar{
+  border-right:1px solid var(--border);
+  display:flex;
+  flex-direction:column;
+  min-width:0;
+  min-height:0;
+  background:var(--card);
+}
+
+.chatSidebarHead{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:17px 18px 11px;
+}
+
+.chatSidebarHead h2{
+  margin:0;
+  font-size:18px;
+  font-weight:800;
+}
+
+.chatSidebarHead span{
+  display:block;
+  color:var(--muted);
+  font-size:11px;
+  margin-top:3px;
+}
+
+.chatSearch{
+  margin:0 12px 10px;
+  border:1px solid var(--border);
+  background:var(--input);
+  border-radius:10px;
+  padding:8px 10px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  color:var(--muted);
+}
+
+.chatSearch input{
+  border:0;
+  outline:0;
+  background:transparent;
+  color:var(--text);
+  width:100%;
+  font:inherit;
+  font-size:12px;
+}
+
+.chatSectionLabel{
+  font-size:10px;
+  font-weight:800;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  color:var(--muted);
+  padding:9px 15px 6px;
+}
+
+.chatConversationList,
+.chatUserList{
+  overflow:auto;
+  padding:0 7px;
+}
+
+.chatConversationList{
+  flex:1 1 auto;
+  min-height:90px;
+}
+
+.chatUserList{
+  flex:0 0 auto;
+  max-height:220px;
+  padding-bottom:8px;
+}
+
+.chatConversation,
+.chatUserRow{
+  width:100%;
+  border:0;
+  background:transparent;
+  color:var(--text);
+  display:flex;
+  align-items:center;
+  gap:10px;
+  text-align:left;
+  padding:9px 10px;
+  border-radius:10px;
+  cursor:pointer;
+  transition:background .15s ease, transform .15s ease;
+}
+
+.chatConversation:hover,
+.chatUserRow:hover{
+  background:var(--nav-hover);
+}
+
+.chatConversation:active,
+.chatUserRow:active{
+  transform:scale(.995);
+}
+
+.chatConversation.active{
+  background:var(--nav-active);
+}
+
+.chatAvatar{
+  width:38px;
+  height:38px;
+  flex:0 0 38px;
+  border-radius:50%;
+  display:grid;
+  place-items:center;
+  background:var(--primary);
+  color:#fff;
+  font-size:11px;
+  font-weight:800;
+}
+
+.chatAvatar.muted{
+  background:var(--detail);
+  color:var(--text);
+}
+
+.chatConversationText,
+.chatUserRow>span:last-child{
+  min-width:0;
+  display:grid;
+  gap:3px;
+  flex:1;
+}
+
+.chatConversationText strong,
+.chatUserRow strong{
+  font-size:12.5px;
+  font-weight:750;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.chatConversationText small,
+.chatUserRow small{
+  color:var(--muted);
+  font-size:10.5px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.chatConversationMeta{
+  margin-left:auto;
+  align-self:stretch;
+  display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+  justify-content:center;
+  gap:4px;
+  color:var(--muted);
+  font-size:9px;
+}
+
+.chatConversationMeta b{
+  background:var(--primary);
+  color:#fff;
+  border-radius:999px;
+  min-width:17px;
+  height:17px;
+  padding:0 5px;
+  display:grid;
+  place-items:center;
+  font-size:9px;
+}
+
+.chatEmptySmall{
+  padding:16px 10px;
+  color:var(--muted);
+  font-size:12px;
+  text-align:center;
+}
+
+.chatMain{
+  min-width:0;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+  background:var(--bg);
+}
+
+.chatHeader{
+  height:68px;
+  flex:0 0 68px;
+  display:flex;
+  align-items:center;
+  gap:11px;
+  padding:11px 18px;
+  border-bottom:1px solid var(--border);
+  background:var(--card);
+}
+
+.chatHeader h3{
+  margin:0;
+  font-size:14px;
+  font-weight:800;
+}
+
+.chatHeader small{
+  color:var(--muted);
+  font-size:10.5px;
+}
+
+.chatMessages{
+  flex:1 1 auto;
+  min-height:0;
+  overflow:auto;
+  padding:18px 24px 14px;
+  scroll-behavior:smooth;
+}
+
+.chatLoading,
+.chatWelcome,
+.chatNoSelection{
+  display:grid;
+  place-items:center;
+  text-align:center;
+  color:var(--muted);
+  height:100%;
+}
+
+.chatWelcome h3{
+  color:var(--text);
+  margin:10px 0 4px;
+  font-size:15px;
+}
+
+.chatWelcome p,
+.chatNoSelection p{
+  margin:0;
+  font-size:12px;
+}
+
+.chatDayDivider{
+  text-align:center;
+  margin:6px auto 14px;
+}
+
+.chatDayDivider span{
+  display:inline-block;
+  background:var(--detail);
+  color:var(--muted);
+  border:1px solid var(--border);
+  border-radius:999px;
+  padding:3px 9px;
+  font-size:9px;
+}
+
+.chatMessageRow{
+  display:flex;
+  width:min(100%,860px);
+  margin:5px auto;
+}
+
+.chatMessageRow.own{
+  justify-content:flex-end;
+}
+
+.chatBubble{
+  max-width:min(68%,560px);
+  padding:9px 11px;
+  border:1px solid var(--border);
+  border-radius:13px 13px 13px 4px;
+  background:var(--card);
+  box-shadow:0 2px 7px rgba(15,23,42,.035);
+}
+
+.chatMessageRow.own .chatBubble{
+  border-color:var(--primary);
+  border-radius:13px 13px 4px 13px;
+  background:var(--primary);
+  color:#fff;
+}
+
+.chatBubble>strong{
+  font-size:10px;
+  color:var(--primary);
+  display:block;
+  margin-bottom:3px;
+}
+
+.chatMessageRow.own .chatBubble>strong{
+  color:#fff;
+}
+
+.chatBody{
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  font-size:13px;
+  line-height:1.45;
+}
+
+.chatMessageMeta{
+  display:flex;
+  justify-content:flex-end;
+  align-items:center;
+  gap:6px;
+  color:var(--muted);
+  font-size:9px;
+  margin-top:4px;
+}
+
+.chatMessageRow.own .chatMessageMeta{
+  color:rgba(255,255,255,.78);
+}
+
+.chatMessageMeta button{
+  border:0;
+  background:transparent;
+  color:inherit;
+  padding:2px;
+  cursor:pointer;
+  border-radius:4px;
+}
+
+.chatMessageMeta button:hover{
+  color:#dc2626;
+  background:rgba(220,38,38,.08);
+}
+
+.chatMessageRow.own .chatMessageMeta button:hover{
+  color:#fff;
+  background:rgba(255,255,255,.14);
+}
+
+.chatComposer{
+  flex:0 0 auto;
+  display:flex;
+  gap:8px;
+  padding:10px 14px 12px;
+  border-top:1px solid var(--border);
+  background:var(--card);
+}
+
+.chatComposer input{
+  flex:1;
+  min-width:0;
+  border:1px solid var(--border);
+  background:var(--input);
+  color:var(--text);
+  border-radius:10px;
+  padding:10px 12px;
+  outline:0;
+  font:inherit;
+  font-size:12.5px;
+}
+
+.chatComposer input:focus{
+  border-color:var(--primary);
+}
+
+.chatComposer button{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  min-width:78px;
+  border-radius:10px;
+  padding:9px 13px;
+}
+
+.chatError{
+  margin:8px 14px 0;
+}
+
+.chatNoSelection{
+  padding:40px;
+}
+
+.chatNoSelection h2{
+  color:var(--text);
+  margin:13px 0 5px;
+  font-size:18px;
+}
+
+.chatConversationList::-webkit-scrollbar,
+.chatUserList::-webkit-scrollbar,
+.chatMessages::-webkit-scrollbar{
+  width:5px;
+}
+
+.chatConversationList::-webkit-scrollbar-thumb,
+.chatUserList::-webkit-scrollbar-thumb,
+.chatMessages::-webkit-scrollbar-thumb{
+  background:var(--border);
+  border-radius:999px;
+}
+
+@media(max-width:900px){
+  .chatShell{
+    grid-template-columns:270px minmax(0,1fr);
+    height:calc(100vh - 115px);
+  }
+
+  .chatMessages{
+    padding:16px;
+  }
+
+  .chatBubble{
+    max-width:78%;
+  }
+}
+
+@media(max-width:700px){
+  .chatShell{
+    grid-template-columns:1fr;
+    height:auto;
+    min-height:700px;
+  }
+
+  .chatSidebar{
+    max-height:350px;
+    border-right:0;
+    border-bottom:1px solid var(--border);
+  }
+
+  .chatConversationList{
+    flex:none;
+    max-height:150px;
+  }
+
+  .chatUserList{
+    max-height:120px;
+  }
+
+  .chatMain{
+    min-height:500px;
+  }
+
+  .chatBubble{
+    max-width:84%;
+  }
+
+  .chatComposer{
+    padding:10px;
+  }
+}
+
+
+/* =========================================================
+   CHAT PAGE — FINAL LAYOUT FIX
+   Keeps the portal itself fixed while Chat owns its
+   internal scrolling areas.
+   ========================================================= */
+
+/* The normal portal pages can scroll, but the Chat workspace
+   must fit inside the viewport and must not create a second
+   page-level scrollbar. */
+.app:has(.chatShell) {
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app:has(.chatShell) > main {
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The global portal header remains fixed at the top. */
+.app:has(.chatShell) > main > header {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+}
+
+/* Remove the generic page title/eyebrow spacing on Chat.
+   Chat itself becomes the complete workspace below the header. */
+.app:has(.chatShell) .content {
+  width: 100%;
+  max-width: none;
+  height: calc(100vh - 72px);
+  min-height: 0;
+  margin: 0;
+  padding: 16px 28px 18px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.app:has(.chatShell) .content > .eyebrow,
+.app:has(.chatShell) .content > h1,
+.app:has(.chatShell) .content > .warning {
+  display: none;
+}
+
+/* The Chat shell itself fills the available content area. */
+.app:has(.chatShell) .chatShell {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  overflow: hidden;
+  border-radius: 16px;
+}
+
+/* =========================================================
+   LEFT SIDEBAR
+   ========================================================= */
+
+.chatSidebar {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.chatSidebarHead {
+  flex: 0 0 auto;
+  padding: 16px 16px 10px;
+}
+
+.chatSidebarHead h2 {
+  font-size: 17px;
+}
+
+.chatSearch {
+  flex: 0 0 auto;
+  margin: 0 12px 10px;
+  padding: 8px 10px;
+}
+
+/* Conversations gets its own scroll area. */
+.chatSidebar > .chatSectionLabel:first-of-type {
+  flex: 0 0 auto;
+}
+
+.chatConversationList {
+  flex: 1 1 48%;
+  min-height: 120px;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 7px;
+}
+
+/* Employees gets its own scroll area instead of extending
+   the whole page downward. */
+.chatSidebar > .chatSectionLabel:nth-of-type(2) {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  margin-top: 6px;
+  padding-top: 11px;
+}
+
+.chatUserList {
+  flex: 1 1 52%;
+  min-height: 120px;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 7px 8px;
+}
+
+.chatConversation,
+.chatUserRow {
+  min-height: 52px;
+  padding: 7px 8px;
+  border-radius: 10px;
+}
+
+.chatAvatar {
+  width: 36px;
+  height: 36px;
+  flex-basis: 36px;
+  font-size: 11px;
+}
+
+/* =========================================================
+   RIGHT CHAT AREA
+   ========================================================= */
+
+.chatMain {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Important: the Chat header must NOT inherit the portal's
+   sticky global header behavior. */
+.chatMain > .chatHeader {
+  position: static;
+  top: auto;
+  z-index: auto;
+  flex: 0 0 64px;
+  height: 64px;
+  min-height: 64px;
+  padding: 10px 18px;
+}
+
+/* Only this area scrolls when messages become long. */
+.chatMessages {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding: 18px 24px;
+}
+
+/* Keep message width comfortable and centered. */
+.chatMessageRow {
+  width: min(100%, 900px);
+  margin: 6px auto;
+}
+
+.chatBubble {
+  max-width: min(72%, 580px);
+}
+
+/* Composer stays fixed at the bottom of the Chat panel. */
+.chatComposer {
+  flex: 0 0 auto;
+  min-height: 64px;
+  padding: 10px 14px;
+  margin: 0;
+}
+
+/* =========================================================
+   SCROLLBARS
+   ========================================================= */
+
+.chatMessages::-webkit-scrollbar,
+.chatConversationList::-webkit-scrollbar,
+.chatUserList::-webkit-scrollbar {
+  width: 5px;
+}
+
+.chatMessages::-webkit-scrollbar-track,
+.chatConversationList::-webkit-scrollbar-track,
+.chatUserList::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chatMessages::-webkit-scrollbar-thumb,
+.chatConversationList::-webkit-scrollbar-thumb,
+.chatUserList::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+}
+
+/* =========================================================
+   RESPONSIVE
+   ========================================================= */
+
+@media (max-width: 900px) {
+  .app:has(.chatShell) .content {
+    padding: 12px 16px 14px;
+  }
+
+  .app:has(.chatShell) .chatShell {
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+
+  .chatBubble {
+    max-width: 78%;
+  }
+}
+
+@media (max-width: 700px) {
+  .app:has(.chatShell) {
+    overflow: auto;
+  }
+
+  .app:has(.chatShell) > main {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .app:has(.chatShell) .content {
+    height: auto;
+    min-height: calc(100vh - 72px);
+    overflow: visible;
+  }
+
+  .app:has(.chatShell) .chatShell {
+    height: calc(100vh - 110px);
+    min-height: 600px;
+    grid-template-columns: 1fr;
+  }
+
+  .chatSidebar {
+    height: 280px;
+    min-height: 280px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .chatConversationList,
+  .chatUserList {
+    min-height: 0;
+  }
+
+  .chatMain {
+    min-height: 0;
+  }
+}
+
+
+/* =========================================================
+   CHAT DELETE — IN-PAGE CONFIRMATION
+   No browser alert/confirm popup.
+   ========================================================= */
+
+.chatModalLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.38);
+  backdrop-filter: blur(3px);
+}
+
+.chatDeleteModal {
+  width: min(440px, calc(100vw - 40px));
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 16px;
+  padding: 22px;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.20);
+}
+
+.chatDeleteIcon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 12px;
+  border-radius: 11px;
+  background: rgba(220, 38, 38, 0.09);
+  color: #dc2626;
+}
+
+.chatDeleteModal h3 {
+  margin: 0 0 7px;
+  font-size: 17px;
+  color: var(--text, #172033);
+}
+
+.chatDeleteModal p {
+  margin: 0 0 13px;
+  color: var(--muted, #667085);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.chatDeletePreview {
+  max-height: 90px;
+  overflow: auto;
+  padding: 10px 12px;
+  margin-bottom: 18px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  background: var(--bg, #f8fafc);
+  color: var(--text, #172033);
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.chatModalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.chatCancelButton,
+.chatDeleteButton {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 9px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.chatCancelButton {
+  border: 1px solid var(--border, #e5e7eb);
+  background: var(--card, #fff);
+  color: var(--text, #172033);
+}
+
+.chatDeleteButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid #dc2626;
+  background: #dc2626;
+  color: #fff;
+}
+
+.chatCancelButton:hover {
+  background: var(--bg, #f8fafc);
+}
+
+.chatDeleteButton:hover {
+  filter: brightness(0.94);
+}
+
+.chatPageNotice {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 11px 14px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  background: var(--card, #fff);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.14);
+  color: var(--text, #172033);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chatPageNotice.success {
+  border-left: 3px solid #16a34a;
+}
+
+@media (max-width: 600px) {
+  .chatModalLayer {
+    align-items: flex-end;
+    padding: 12px;
+  }
+
+  .chatDeleteModal {
+    width: 100%;
+  }
+
+  .chatModalActions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
   }
 }

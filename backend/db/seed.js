@@ -110,7 +110,11 @@ async function seed() {
         address: "Ahmedabad HQ",
         joining_date: "2023-01-01",
         end_date: null,
-        assigned_mentor: null
+        assigned_mentor: null,
+        salary_basic: 0,
+        salary_hra: 0,
+        salary_allowances: 0,
+        salary_deductions: 0
       },
 
       {
@@ -126,7 +130,11 @@ async function seed() {
         address: "Ahmedabad",
         joining_date: "2023-03-10",
         end_date: null,
-        assigned_mentor: null
+        assigned_mentor: null,
+        salary_basic: 80000,
+        salary_hra: 16000,
+        salary_allowances: 10000,
+        salary_deductions: 0
       },
 
       {
@@ -142,7 +150,11 @@ async function seed() {
         address: "Ahmedabad",
         joining_date: "2023-05-15",
         end_date: null,
-        assigned_mentor: null
+        assigned_mentor: null,
+        salary_basic: 70000,
+        salary_hra: 14000,
+        salary_allowances: 8000,
+        salary_deductions: 0
       },
 
       {
@@ -158,7 +170,11 @@ async function seed() {
         address: "Vadodara",
         joining_date: "2025-01-01",
         end_date: null,
-        assigned_mentor: "Rahul Verma"
+        assigned_mentor: "Rahul Verma",
+        salary_basic: 40000,
+        salary_hra: 8000,
+        salary_allowances: 5000,
+        salary_deductions: 0
       },
 
       {
@@ -174,7 +190,11 @@ async function seed() {
         address: "Anand",
         joining_date: "2025-02-01",
         end_date: null,
-        assigned_mentor: "Priya Shah"
+        assigned_mentor: "Priya Shah",
+        salary_basic: 43000,
+        salary_hra: 9000,
+        salary_allowances: 8000,
+        salary_deductions: 0
       },
 
       {
@@ -190,7 +210,11 @@ async function seed() {
         address: "Anand",
         joining_date: "2026-06-01",
         end_date: "2026-12-31",
-        assigned_mentor: "Alex Johnson"
+        assigned_mentor: "Alex Johnson",
+        salary_basic: 15000,
+        salary_hra: 0,
+        salary_allowances: 2000,
+        salary_deductions: 0
       }
     ];
 
@@ -214,12 +238,17 @@ async function seed() {
           joining_date,
           end_date,
           assigned_mentor,
+          salary_basic,
+          salary_hra,
+          salary_allowances,
+          salary_deductions,
           must_change_password
         )
         VALUES (
           $1, $2, $3, $4, $5,
           $6, $7, $8, $9, $10,
-          $11, $12, $13, $14, $15
+          $11, $12, $13, $14,
+          $15, $16, $17, $18, $19
         )
         RETURNING id, email
         `,
@@ -238,6 +267,10 @@ async function seed() {
           user.joining_date,
           user.end_date,
           user.assigned_mentor,
+          user.salary_basic || 0,
+          user.salary_hra || 0,
+          user.salary_allowances || 0,
+          user.salary_deductions || 0,
           ["employee", "intern"].includes(user.role.toLowerCase())
         ]
       );
@@ -382,31 +415,28 @@ async function seed() {
       ]
     );
 
-    console.log("Creating salary records...");
+    console.log("Creating previous-month salary records...");
 
     await client.query(
-      `
-      INSERT INTO salary_records (
-        user_id,
-        month,
-        amount,
-        status
+      `INSERT INTO salary_records (
+        user_id, month, amount, basic_salary, hra, allowances, overtime_pay,
+        gross_salary, deductions, net_salary, status
       )
-      VALUES
-        ($1, $2, $3, $4),
-        ($5, $6, $7, $8)
-      `,
-      [
-        ids["employee@triobyte.demo"],
-        "August 2026",
-        55000,
-        "Processed",
-
-        ids["neha@triobyte.demo"],
-        "August 2026",
-        60000,
-        "Processed"
-      ]
+      SELECT
+        u.id,
+        TO_CHAR(CURRENT_DATE - INTERVAL '1 month', 'FMMonth YYYY'),
+        u.salary_basic + u.salary_hra + u.salary_allowances - u.salary_deductions,
+        u.salary_basic,
+        u.salary_hra,
+        u.salary_allowances,
+        0,
+        u.salary_basic + u.salary_hra + u.salary_allowances,
+        u.salary_deductions,
+        u.salary_basic + u.salary_hra + u.salary_allowances - u.salary_deductions,
+        'Pending Review'
+      FROM users u
+      WHERE LOWER(u.role) = 'employee'
+    `
     );
 
     console.log("Creating attendance records...");

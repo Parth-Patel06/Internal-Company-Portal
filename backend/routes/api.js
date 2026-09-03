@@ -131,7 +131,7 @@ router.put("/profile", async (req, res) => {
          department, designation, employee_level,
          company_id, mobile, address,
          joining_date, end_date, permanent,
-         assigned_mentor, blocked, must_change_password`,
+         assigned_mentor, must_change_password`,
       [fullName, mobile, address, req.user.id]
     );
 
@@ -559,13 +559,15 @@ router.get("/dashboard", async (req, res) => {
 /* ==================== USERS ==================== */
 
 router.get("/users", allow("CEO", "ADMIN", "HR"), async (req, res) => {
+  await completeDueOffboardings();
   const rows = await q(
     `SELECT
        id, employee_id, full_name, email, role,
        department, designation, employee_level,
        company_id, mobile, address,
        joining_date, end_date, permanent,
-       assigned_mentor, blocked
+       assigned_mentor, blocked, employment_status, email_status,
+       mailbox_retention_days, offboarding_started_at, offboarding_completed_at
      FROM users
      ORDER BY id`
   );
@@ -664,44 +666,702 @@ router.post("/users", allow("CEO", "ADMIN", "HR"), async (req, res) => {
   }
 });
 
-router.put(
-  "/users/:id/block",
-  allow("CEO", "ADMIN", "HR"),
-  async (req, res) => {
-    const target = (
-      await q("SELECT id, role FROM users WHERE id = $1", [req.params.id])
-    )[0];
+
+/* ==================== BLOCK + OFFBOARDING ==================== */
+
+const OFFBOARDING_FORWARD_EMAIL = process.env.OFFBOARDING_FORWARD_EMAIL || "hr@triobyte.demo";
+const MANAGEMENT_ROLES = ["CEO", "ADMIN", "HR"];
+
+function canBlockTarget(actor, target) {
+  const actorRole = roleOf(actor);
+  const targetRole = roleOf(target);
+
+  // Only CEO, Admin and HR can block/unblock accounts.
+  if (!MANAGEMENT_ROLES.includes(actorRole)) return false;
+
+  // The CEO can never be blocked by anyone, including the CEO.
+  if (targetRole === "CEO") return false;
+
+  // Nobody can block/unblock their own account.
+  if (Number(actor.id) === Number(target.id)) return false;
+
+  // CEO/Admin/HR may block the remaining roles.
+  return true;
+}
+
+function canOffboardTarget(actor, target) {
+  const actorRole = roleOf(actor);
+  const targetRole = roleOf(target);
+
+  // Offboarding is a management action only.
+  if (!MANAGEMENT_ROLES.includes(actorRole)) return false;
+
+  // CEO is permanently protected.
+  if (targetRole === "CEO") return false;
+
+  // Nobody can offboard themselves.
+  if (Number(actor.id) === Number(target.id)) return false;
+
+  // CEO can offboard anyone except the CEO.
+  if (actorRole === "CEO") return true;
+
+  // Admin can offboard HR, Employees and Interns, but not Admins.
+  if (actorRole === "ADMIN") {
+    return ["HR", "EMPLOYEE", "INTERN"].includes(targetRole);
+  }
+
+  // HR can offboard Employees and Interns only.
+  if (actorRole === "HR") {
+    return ["EMPLOYEE", "INTERN"].includes(targetRole);
+  }
+
+  return false;
+}
+
+function canManageOffboarding(actor) {
+  return MANAGEMENT_ROLES.includes(roleOf(actor));
+}
+
+async function archiveEmployeeWork(offboardingId, userId) {
+  // Company work is copied into the permanent archive. Nothing in the
+  // archive is deleted when an employee leaves.
+  const projectRows = await q(
+    `SELECT DISTINCT
+       p.id,
+       p.name,
+       p.description,
+       p.status,
+       p.priority,
+       p.progress,
+       p.lead_id,
+       p.created_by
+     FROM projects p
+     LEFT JOIN project_members pm ON pm.project_id = p.id
+     WHERE p.lead_id = $1
+        OR p.created_by = $1
+        OR pm.user_id = $1`,
+    [userId]
+  );
+
+  for (const project of projectRows) {
+    await q(
+      `INSERT INTO offboarding_work_archive
+         (offboarding_id, user_id, entity_type, entity_id, snapshot)
+       VALUES ($1, $2, 'PROJECT', $3, $4::jsonb)
+       ON CONFLICT DO NOTHING`,
+      [offboardingId, userId, project.id, JSON.stringify(project)]
+    );
+  }
+
+  const taskRows = await q(
+    `SELECT DISTINCT
+       t.id,
+       t.title,
+       t.description,
+       t.status,
+       t.priority,
+       t.start_date,
+       t.deadline,
+       t.project_id,
+       t.assignee_id,
+       t.created_by
+     FROM tasks t
+     WHERE t.assignee_id = $1
+        OR t.created_by = $1`,
+    [userId]
+  );
+
+  for (const task of taskRows) {
+    await q(
+      `INSERT INTO offboarding_work_archive
+         (offboarding_id, user_id, entity_type, entity_id, snapshot)
+       VALUES ($1, $2, 'TASK', $3, $4::jsonb)
+       ON CONFLICT DO NOTHING`,
+      [offboardingId, userId, task.id, JSON.stringify(task)]
+    );
+  }
+}
+
+async function completeDueOffboardings() {
+  // The selected last working day remains cancellable for the whole day.
+  // Completion happens the following day.
+  await pool.query(
+    `UPDATE users u
+     SET employment_status = 'Exited',
+         offboarding_completed_at = COALESCE(u.offboarding_completed_at, NOW())
+     WHERE UPPER(COALESCE(u.employment_status, 'ACTIVE')) = 'OFFBOARDING'
+       AND u.id IN (
+         SELECT o.user_id
+         FROM offboarding_records o
+         WHERE o.status = 'IN_PROGRESS'
+           AND o.last_working_day < CURRENT_DATE
+       )`
+  );
+
+  await pool.query(
+    `UPDATE offboarding_records
+     SET status = 'COMPLETED',
+         completed_at = COALESCE(completed_at, NOW())
+     WHERE status = 'IN_PROGRESS'
+       AND last_working_day < CURRENT_DATE`
+  );
+}
+
+/* ==================== BLOCK ==================== */
+
+router.post("/users/:id/block", allow("CEO", "ADMIN", "HR"), async (req, res) => {
+  try {
+    const targetRows = await q(
+      `SELECT id, employee_id, full_name, email, role, blocked, employment_status
+       FROM users
+       WHERE id = $1`,
+      [req.params.id]
+    );
+    const target = targetRows[0];
 
     if (!target) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const actor = roleOf(req.user);
-    const targetRole = String(target.role || "").toUpperCase();
-
-    if (targetRole === "CEO" && actor !== "CEO") {
-      return res.status(403).json({
-        message: "Founder/CEO cannot be blocked by this role"
-      });
+    if (!canBlockTarget(req.user, target)) {
+      return res.status(403).json({ message: "You cannot block this account" });
     }
 
-    if (actor === "HR" && ["ADMIN", "CEO"].includes(targetRole)) {
-      return res.status(403).json({
-        message: "HR cannot block Admin or CEO"
-      });
+    const status = String(target.employment_status || "ACTIVE").trim().toUpperCase();
+    if (status === "OFFBOARDING" || status === "EXITED") {
+      return res.status(409).json({ message: "This account is already inactive" });
+    }
+
+    if (target.blocked) {
+      return res.status(409).json({ message: "Account is already blocked" });
     }
 
     const rows = await q(
       `UPDATE users
-       SET blocked = NOT blocked
+       SET blocked = TRUE
        WHERE id = $1
-       RETURNING id, blocked`,
+       RETURNING id, employee_id, full_name, email, role, blocked, employment_status`,
+      [target.id]
+    );
+
+    await q(
+      `INSERT INTO offboarding_audit_log
+         (user_id, actor_id, action, details)
+       VALUES ($1, $2, 'BLOCKED', $3)`,
+      [
+        target.id,
+        req.user.id,
+        JSON.stringify({
+          reason: "Account blocked",
+          access_disabled: true,
+        }),
+      ]
+    );
+
+    return res.json({
+      ...rows[0],
+      message: "Account blocked successfully.",
+    });
+  } catch (error) {
+    console.error("BLOCK ERROR:", error);
+    return res.status(500).json({ message: "Unable to block account." });
+  }
+});
+
+router.post("/users/:id/unblock", allow("CEO", "ADMIN", "HR"), async (req, res) => {
+  try {
+    const targetRows = await q(
+      `SELECT id, employee_id, full_name, email, role, blocked, employment_status
+       FROM users
+       WHERE id = $1`,
+      [req.params.id]
+    );
+    const target = targetRows[0];
+
+    if (!target) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (!canBlockTarget(req.user, target)) {
+      return res.status(403).json({ message: "You cannot unblock this account" });
+    }
+
+    const status = String(target.employment_status || "ACTIVE").trim().toUpperCase();
+    if (status !== "ACTIVE") {
+      return res.status(409).json({ message: "Only active accounts can be unblocked" });
+    }
+
+    if (!target.blocked) {
+      return res.status(409).json({ message: "Account is already active" });
+    }
+
+    const rows = await q(
+      `UPDATE users
+       SET blocked = FALSE
+       WHERE id = $1
+       RETURNING id, employee_id, full_name, email, role, blocked, employment_status`,
+      [target.id]
+    );
+
+    await q(
+      `INSERT INTO offboarding_audit_log
+         (user_id, actor_id, action, details)
+       VALUES ($1, $2, 'UNBLOCKED', $3)`,
+      [
+        target.id,
+        req.user.id,
+        JSON.stringify({
+          reason: "Account unblocked",
+          access_restored: true,
+        }),
+      ]
+    );
+
+    return res.json({
+      ...rows[0],
+      message: "Account unblocked successfully.",
+    });
+  } catch (error) {
+    console.error("UNBLOCK ERROR:", error);
+    return res.status(500).json({ message: "Unable to unblock account." });
+  }
+});
+
+/* ==================== OFFBOARDING ==================== */
+
+router.get("/users/:id/offboarding", allow("CEO", "ADMIN", "HR"), async (req, res) => {
+  try {
+    const rows = await q(
+      `SELECT
+         u.id,
+         u.employee_id,
+         u.full_name,
+         u.email,
+         u.role,
+         u.department,
+         u.designation,
+         u.employee_level,
+         u.blocked,
+         u.employment_status,
+         u.email_status,
+         u.mailbox_retention_days,
+         u.auto_reply_enabled,
+         u.forwarding_enabled,
+         u.forwarding_email,
+         u.mailbox_action,
+         u.offboarding_started_at,
+         u.offboarding_completed_at,
+         o.id AS offboarding_id,
+         o.last_working_day,
+         o.exit_reason,
+         o.manager_id,
+         manager.full_name AS manager_name,
+         o.notes,
+         o.status AS offboarding_status,
+         o.mailbox_retention_days AS record_retention_days,
+         o.auto_reply_enabled AS record_auto_reply_enabled,
+         o.forwarding_enabled AS record_forwarding_enabled,
+         o.forwarding_email AS record_forwarding_email,
+         o.mailbox_action AS record_mailbox_action,
+         o.created_by,
+         creator.full_name AS created_by_name,
+         o.completed_by,
+         o.created_at AS offboarding_created_at,
+         o.completed_at AS offboarding_completed_at
+       FROM users u
+       LEFT JOIN LATERAL (
+         SELECT *
+         FROM offboarding_records x
+         WHERE x.user_id = u.id
+         ORDER BY x.id DESC
+         LIMIT 1
+       ) o ON TRUE
+       LEFT JOIN users manager ON manager.id = o.manager_id
+       LEFT JOIN users creator ON creator.id = o.created_by
+       WHERE u.id = $1`,
       [req.params.id]
     );
 
-    res.json(rows[0]);
+    if (!rows[0]) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const audit = await q(
+      `SELECT
+         l.id,
+         l.offboarding_id,
+         l.action,
+         l.details,
+         l.created_at,
+         u.full_name AS performed_by_name
+       FROM offboarding_audit_log l
+       LEFT JOIN users u ON u.id = l.actor_id
+       WHERE l.user_id = $1
+       ORDER BY l.created_at DESC, l.id DESC`,
+      [req.params.id]
+    );
+
+    return res.json({ ...rows[0], audit });
+  } catch (error) {
+    console.error("GET OFFBOARDING ERROR:", error);
+    return res.status(500).json({ message: "Unable to load offboarding details" });
   }
-);
+});
+
+router.post("/users/:id/offboarding/start", allow("CEO", "ADMIN", "HR"), async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const targetResult = await client.query(
+      `SELECT
+         id,
+         employee_id,
+         full_name,
+         email,
+         role,
+         department,
+         designation,
+         blocked,
+         employment_status
+       FROM users
+       WHERE id = $1`,
+      [req.params.id]
+    );
+    const target = targetResult.rows[0];
+
+    if (!target) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (!canOffboardTarget(req.user, target)) {
+      return res.status(403).json({
+        message: "You do not have permission to offboard this employee",
+      });
+    }
+
+    if (String(target.employment_status || "ACTIVE").trim().toUpperCase() !== "ACTIVE") {
+      return res.status(409).json({
+        message: "Only active users can be offboarded",
+      });
+    }
+
+    // Offboarding starts from an active account. A separately blocked account
+    // must first be handled through the block/unblock workflow.
+    if (target.blocked) {
+      return res.status(409).json({
+        message: "Unblock the account before starting offboarding",
+      });
+    }
+
+    const body = req.body || {};
+    const lastWorkingDay = String(body.last_working_day || "").trim();
+    const reason = String(body.reason || body.exit_reason || "").trim();
+    const retentionDays = Number(body.retention_days);
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(lastWorkingDay)) {
+      return res.status(400).json({
+        message: "A valid last working day is required",
+      });
+    }
+
+    if (!reason) {
+      return res.status(400).json({
+        message: "Reason for leaving is required",
+      });
+    }
+
+    if (![30, 60, 90].includes(retentionDays)) {
+      return res.status(400).json({
+        message: "Retention period must be 30, 60, or 90 days",
+      });
+    }
+
+    const dateCheck = await client.query(
+      `SELECT ($1::date >= CURRENT_DATE) AS valid`,
+      [lastWorkingDay]
+    );
+
+    if (!dateCheck.rows[0]?.valid) {
+      return res.status(400).json({
+        message: "Last working day cannot be before today",
+      });
+    }
+
+    await client.query("BEGIN");
+
+    // The database schema uses one offboarding record per employee.
+    // Reuse a previous cancelled/completed record instead of inserting a
+    // second row and violating the UNIQUE(user_id) constraint.
+    const off = await client.query(
+      `INSERT INTO offboarding_records (
+         user_id,
+         last_working_day,
+         exit_reason,
+         manager_id,
+         notes,
+         status,
+         mailbox_retention_days,
+         auto_reply_enabled,
+         forwarding_enabled,
+         forwarding_email,
+         mailbox_action,
+         created_by,
+         completed_by,
+         created_at,
+         completed_at
+       )
+       VALUES (
+         $1,
+         $2,
+         $3,
+         NULL,
+         NULL,
+         'IN_PROGRESS',
+         $4,
+         TRUE,
+         TRUE,
+         $5,
+         'Archive',
+         $6,
+         NULL,
+         NOW(),
+         NULL
+       )
+       ON CONFLICT (user_id) DO UPDATE SET
+         last_working_day = EXCLUDED.last_working_day,
+         exit_reason = EXCLUDED.exit_reason,
+         manager_id = EXCLUDED.manager_id,
+         notes = EXCLUDED.notes,
+         status = 'IN_PROGRESS',
+         mailbox_retention_days = EXCLUDED.mailbox_retention_days,
+         auto_reply_enabled = EXCLUDED.auto_reply_enabled,
+         forwarding_enabled = EXCLUDED.forwarding_enabled,
+         forwarding_email = EXCLUDED.forwarding_email,
+         mailbox_action = EXCLUDED.mailbox_action,
+         created_by = EXCLUDED.created_by,
+         completed_by = NULL,
+         created_at = NOW(),
+         completed_at = NULL
+       RETURNING *`,
+      [
+        target.id,
+        lastWorkingDay,
+        reason,
+        retentionDays,
+        OFFBOARDING_FORWARD_EMAIL,
+        req.user.id,
+      ]
+    );
+
+    const offboardingId = off.rows[0].id;
+
+    // Offboarding and manual blocking are separate features, but starting
+    // offboarding immediately disables portal access as required by the
+    // company policy. The blocked flag records that access state.
+    await client.query(
+      `UPDATE users
+       SET employment_status = 'Offboarding',
+           blocked = TRUE,
+           email_status = 'Deactivated',
+           mailbox_retention_days = $1,
+           auto_reply_enabled = TRUE,
+           forwarding_enabled = TRUE,
+           forwarding_email = $2,
+           mailbox_action = 'Archive',
+           offboarding_started_at = NOW(),
+           offboarding_completed_at = NULL,
+           end_date = $3
+       WHERE id = $4`,
+      [retentionDays, OFFBOARDING_FORWARD_EMAIL, lastWorkingDay, target.id]
+    );
+
+    await client.query(
+      `INSERT INTO offboarding_audit_log
+         (offboarding_id, user_id, actor_id, action, details)
+       VALUES ($1, $2, $3, 'OFFBOARDING_STARTED', $4)`,
+      [
+        offboardingId,
+        target.id,
+        req.user.id,
+        JSON.stringify({
+          last_working_day: lastWorkingDay,
+          reason,
+          retention_days: retentionDays,
+          email_forward_to: OFFBOARDING_FORWARD_EMAIL,
+          auto_reply: true,
+          mailbox_action: "Archive",
+          work_preserved: true,
+          access_disabled_immediately: true,
+        }),
+      ]
+    );
+
+    await client.query("COMMIT");
+
+    // Preserve company work after the offboarding record exists. Archive
+    // failure must not undo account deactivation or the audit record.
+    try {
+      await archiveEmployeeWork(offboardingId, target.id);
+    } catch (archiveError) {
+      console.error("OFFBOARDING WORK ARCHIVE ERROR:", archiveError);
+    }
+
+    await completeDueOffboardings();
+
+    return res.status(201).json({
+      message: "Offboarding started successfully.",
+      offboarding: off.rows[0],
+    });
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("START OFFBOARDING ERROR:", error);
+
+    if (error.code === "23505") {
+      return res.status(409).json({
+        message: "Offboarding is already in progress for this employee",
+      });
+    }
+
+    return res.status(500).json({
+      message: "Unable to start offboarding.",
+    });
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/users/:id/offboarding/cancel", allow("CEO", "ADMIN", "HR"), async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const targetResult = await client.query(
+      `SELECT
+         id,
+         full_name,
+         role,
+         employment_status,
+         blocked
+       FROM users
+       WHERE id = $1`,
+      [req.params.id]
+    );
+    const target = targetResult.rows[0];
+
+    if (!target) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (!canOffboardTarget(req.user, target)) {
+      return res.status(403).json({
+        message: "You do not have permission to cancel this offboarding",
+      });
+    }
+
+    if (String(target.employment_status || "ACTIVE").trim().toUpperCase() !== "OFFBOARDING") {
+      return res.status(409).json({
+        message: "User is not currently being offboarded",
+      });
+    }
+
+    const latest = await client.query(
+      `SELECT id
+       FROM offboarding_records
+       WHERE user_id = $1
+         AND status = 'IN_PROGRESS'
+       ORDER BY id DESC
+       LIMIT 1`,
+      [target.id]
+    );
+
+    if (!latest.rows[0]) {
+      return res.status(404).json({
+        message: "Active offboarding record not found",
+      });
+    }
+
+    await client.query("BEGIN");
+
+    await client.query(
+      `UPDATE offboarding_records
+       SET status = 'CANCELLED',
+           completed_by = NULL,
+           completed_at = NULL
+       WHERE id = $1`,
+      [latest.rows[0].id]
+    );
+
+    // Offboarding automatically disabled this account, so cancellation
+    // restores the account to its pre-offboarding active state.
+    await client.query(
+      `UPDATE users
+       SET employment_status = 'Active',
+           blocked = FALSE,
+           email_status = 'Active',
+           mailbox_retention_days = NULL,
+           auto_reply_enabled = FALSE,
+           forwarding_enabled = FALSE,
+           forwarding_email = NULL,
+           mailbox_action = 'Archive',
+           offboarding_started_at = NULL,
+           offboarding_completed_at = NULL
+       WHERE id = $1`,
+      [target.id]
+    );
+
+    await client.query(
+      `INSERT INTO offboarding_audit_log
+         (offboarding_id, user_id, actor_id, action, details)
+       VALUES ($1, $2, $3, 'OFFBOARDING_CANCELLED', $4)`,
+      [
+        latest.rows[0].id,
+        target.id,
+        req.user.id,
+        JSON.stringify({
+          restored_access: true,
+          email_reactivated: true,
+          cancellation_confirmed: true,
+        }),
+      ]
+    );
+
+    await client.query("COMMIT");
+
+    return res.json({
+      message: "Offboarding cancelled. The account is active again.",
+    });
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("CANCEL OFFBOARDING ERROR:", error);
+    return res.status(500).json({
+      message: "Unable to cancel offboarding.",
+    });
+  } finally {
+    client.release();
+  }
+});
+
+router.get("/users/:id/archived-work", allow("CEO", "ADMIN", "HR"), async (req, res) => {
+  try {
+    const rows = await q(
+      `SELECT
+         entity_type,
+         entity_id,
+         snapshot,
+         created_at
+       FROM offboarding_work_archive
+       WHERE user_id = $1
+       ORDER BY entity_type, entity_id`,
+      [req.params.id]
+    );
+
+    return res.json(rows);
+  } catch (error) {
+    console.error("ARCHIVED WORK ERROR:", error);
+    return res.status(500).json({
+      message: "Unable to load archived work.",
+    });
+  }
+});
 
 /* ==================== PROJECTS ==================== */
 
@@ -1575,16 +2235,31 @@ router.post("/daily-work", async (req, res) => {
 router.get("/salary", async (req, res) => {
   const rows = isManagement(req.user)
     ? await q(
-        `SELECT s.*, u.full_name, u.employee_id
+        `SELECT s.*, u.full_name, u.employee_id, u.role AS employee_role,
+                u.department, u.designation,
+                reviewer.full_name AS reviewed_by_name,
+                approver.full_name AS approved_by_name,
+                processor.full_name AS processed_by_name
          FROM salary_records s
          LEFT JOIN users u ON u.id = s.user_id
-         ORDER BY s.id DESC`
+         LEFT JOIN users reviewer ON reviewer.id = s.reviewed_by
+         LEFT JOIN users approver ON approver.id = s.approved_by
+         LEFT JOIN users processor ON processor.id = s.processed_by
+         ORDER BY s.month DESC, s.id DESC`
       )
     : await q(
-        `SELECT *
-         FROM salary_records
-         WHERE user_id = $1
-         ORDER BY id DESC`,
+        `SELECT s.*, u.full_name, u.employee_id, u.role AS employee_role,
+                u.department, u.designation,
+                reviewer.full_name AS reviewed_by_name,
+                approver.full_name AS approved_by_name,
+                processor.full_name AS processed_by_name
+         FROM salary_records s
+         LEFT JOIN users u ON u.id = s.user_id
+         LEFT JOIN users reviewer ON reviewer.id = s.reviewed_by
+         LEFT JOIN users approver ON approver.id = s.approved_by
+         LEFT JOIN users processor ON processor.id = s.processed_by
+         WHERE s.user_id = $1
+         ORDER BY s.month DESC, s.id DESC`,
         [req.user.id]
       );
 
@@ -1688,28 +2363,344 @@ router.get("/repos", async (req, res) => {
 
 /* ==================== CHAT ==================== */
 
+function canDeleteChatMessage(user) {
+  return ["CEO", "ADMIN"].includes(roleOf(user));
+}
+
+async function ensureDirectConversation(userA, userB) {
+  const a = Number(userA);
+  const b = Number(userB);
+  const one = Math.min(a, b);
+  const two = Math.max(a, b);
+
+  const rows = await q(
+    `INSERT INTO chat_conversations
+       (conversation_type, user_one_id, user_two_id)
+     VALUES ('direct', $1, $2)
+     ON CONFLICT (conversation_type, user_one_id, user_two_id)
+     DO UPDATE SET conversation_type = EXCLUDED.conversation_type
+     RETURNING id`,
+    [one, two]
+  );
+
+  return rows[0].id;
+}
+
+async function canAccessConversation(conversationId, user) {
+  if (isManagement(user)) return true;
+
+  const rows = await q(
+    `SELECT id
+     FROM chat_conversations
+     WHERE id = $1
+       AND (user_one_id = $2 OR user_two_id = $2)`,
+    [conversationId, user.id]
+  );
+
+  return rows.length > 0;
+}
+
+router.get("/chat/users", async (req, res) => {
+  const rows = await q(
+    `SELECT id, employee_id, full_name, email, role, employee_level
+     FROM users
+     WHERE id <> $1
+       AND UPPER(COALESCE(employment_status, 'ACTIVE')) = 'ACTIVE'
+     ORDER BY full_name ASC`,
+    [req.user.id]
+  );
+
+  res.json(rows);
+});
+
+router.get("/chat/conversations", async (req, res) => {
+  const rows = await q(
+    `SELECT
+       c.id,
+       c.conversation_type,
+       CASE WHEN c.user_one_id = $1 THEN c.user_two_id ELSE c.user_one_id END AS other_user_id,
+       u.full_name AS other_user_name,
+       u.employee_id AS other_employee_id,
+       u.role AS other_user_role,
+       u.employee_level AS other_employee_level,
+       lm.id AS last_message_id,
+       lm.body AS last_message_body,
+       lm.created_at AS last_message_at,
+       lm.sender_id AS last_message_sender_id,
+       COALESCE((
+         SELECT COUNT(*)::int
+         FROM chat_messages um
+         WHERE um.conversation_id = c.id
+           AND um.receiver_id = $1
+           AND um.read_at IS NULL
+           AND um.deleted_at IS NULL
+       ), 0) AS unread_count
+     FROM chat_conversations c
+     JOIN users u
+       ON u.id = CASE WHEN c.user_one_id = $1 THEN c.user_two_id ELSE c.user_one_id END
+     LEFT JOIN LATERAL (
+       SELECT id, body, created_at, sender_id
+       FROM chat_messages
+       WHERE conversation_id = c.id
+         AND deleted_at IS NULL
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1
+     ) lm ON TRUE
+     WHERE c.conversation_type = 'direct'
+       AND (c.user_one_id = $1 OR c.user_two_id = $1)
+     ORDER BY lm.created_at DESC NULLS LAST, c.id DESC`,
+    [req.user.id]
+  );
+
+  res.json(rows);
+});
+
+router.post("/chat/conversations", async (req, res) => {
+  const otherUserId = Number(req.body.user_id);
+
+  if (!otherUserId || otherUserId === Number(req.user.id)) {
+    return res.status(400).json({ message: "Choose another employee." });
+  }
+
+  const target = await q(
+    `SELECT id, full_name, employee_id, email, role, employee_level
+     FROM users
+     WHERE id = $1
+       AND UPPER(COALESCE(employment_status, 'ACTIVE')) = 'ACTIVE'`,
+    [otherUserId]
+  );
+
+  if (!target[0]) {
+    return res.status(404).json({ message: "Employee not found or inactive." });
+  }
+
+  const id = await ensureDirectConversation(req.user.id, otherUserId);
+  res.status(201).json({
+    id,
+    conversation_type: "direct",
+    other_user_id: target[0].id,
+    other_user_name: target[0].full_name,
+    other_employee_id: target[0].employee_id,
+    other_user_role: target[0].role,
+    other_employee_level: target[0].employee_level
+  });
+});
+
+router.get("/chat/conversations/:id/messages", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  if (!Number.isInteger(conversationId)) {
+    return res.status(400).json({ message: "Invalid conversation ID." });
+  }
+
+  if (!(await canAccessConversation(conversationId, req.user))) {
+    return res.status(403).json({ message: "You cannot access this conversation." });
+  }
+
+  // Only a participant's unread messages are marked read. Management monitoring
+  // does not silently mark an employee's messages as read.
+  if (!isManagement(req.user)) {
+    await q(
+      `UPDATE chat_messages
+       SET read_at = COALESCE(read_at, NOW())
+       WHERE conversation_id = $1
+         AND receiver_id = $2
+         AND read_at IS NULL
+         AND deleted_at IS NULL`,
+      [conversationId, req.user.id]
+    );
+  }
+
+  const rows = await q(
+    `SELECT
+       c.id,
+       c.conversation_id,
+       c.sender_id,
+       c.receiver_id,
+       c.body,
+       c.message_type,
+       c.created_at,
+       c.read_at,
+       c.deleted_at,
+       s.full_name AS sender_name,
+       r.full_name AS receiver_name
+     FROM chat_messages c
+     LEFT JOIN users s ON s.id = c.sender_id
+     LEFT JOIN users r ON r.id = c.receiver_id
+     WHERE c.conversation_id = $1
+       AND c.deleted_at IS NULL
+     ORDER BY c.created_at ASC, c.id ASC`,
+    [conversationId]
+  );
+
+  res.json(rows);
+});
+
+router.post("/chat/conversations/:id/messages", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const body = String(req.body.body || "").trim();
+
+  if (!Number.isInteger(conversationId) || !body) {
+    return res.status(400).json({ message: "Conversation and message are required." });
+  }
+
+  if (body.length > 5000) {
+    return res.status(400).json({ message: "Message is too long (maximum 5000 characters)." });
+  }
+
+  const conversation = await q(
+    `SELECT id, user_one_id, user_two_id
+     FROM chat_conversations
+     WHERE id = $1 AND conversation_type = 'direct'`,
+    [conversationId]
+  );
+
+  if (!conversation[0]) {
+    return res.status(404).json({ message: "Conversation not found." });
+  }
+
+  const c = conversation[0];
+  const recipientId = Number(c.user_one_id) === Number(req.user.id)
+    ? c.user_two_id
+    : Number(c.user_two_id) === Number(req.user.id)
+      ? c.user_one_id
+      : null;
+
+  if (!recipientId) {
+    return res.status(403).json({ message: "You cannot send messages in this conversation." });
+  }
+
+  const rows = await q(
+    `INSERT INTO chat_messages
+       (conversation_id, sender_id, receiver_id, body, message_type)
+     VALUES ($1, $2, $3, $4, 'text')
+     RETURNING id, conversation_id, sender_id, receiver_id, body, message_type, created_at, read_at, deleted_at`,
+    [conversationId, req.user.id, recipientId, body]
+  );
+
+  const message = {
+    ...rows[0],
+    sender_name: req.user.full_name,
+    receiver_name: (await q(`SELECT full_name FROM users WHERE id = $1`, [recipientId]))[0]?.full_name || ""
+  };
+
+  const io = req.app.locals.io;
+  if (io) io.to(`chat:conversation:${conversationId}`).emit("chat:message", message);
+
+  res.status(201).json(message);
+});
+
+router.post("/chat/conversations/:id/read", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  if (!(await canAccessConversation(conversationId, req.user))) {
+    return res.status(403).json({ message: "You cannot access this conversation." });
+  }
+
+  await q(
+    `UPDATE chat_messages
+     SET read_at = COALESCE(read_at, NOW())
+     WHERE conversation_id = $1
+       AND receiver_id = $2
+       AND read_at IS NULL
+       AND deleted_at IS NULL`,
+    [conversationId, req.user.id]
+  );
+
+  const io = req.app.locals.io;
+  if (io) io.to(`chat:conversation:${conversationId}`).emit("chat:read", {
+    conversation_id: conversationId,
+    reader_id: req.user.id
+  });
+
+  res.json({ ok: true });
+});
+
+router.delete("/chat/messages/:id", async (req, res) => {
+  if (!canDeleteChatMessage(req.user)) {
+    return res.status(403).json({
+      message: "Only Admin and CEO can delete chat messages."
+    });
+  }
+
+  const messageId = Number(req.params.id);
+  if (!Number.isInteger(messageId)) {
+    return res.status(400).json({ message: "Invalid message ID." });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const result = await client.query(
+      `SELECT id, conversation_id, sender_id, body, deleted_at
+       FROM chat_messages
+       WHERE id = $1
+       FOR UPDATE`,
+      [messageId]
+    );
+
+    const message = result.rows[0];
+    if (!message) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Message not found." });
+    }
+
+    if (message.deleted_at) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ message: "Message has already been deleted." });
+    }
+
+    await client.query(
+      `INSERT INTO chat_message_deletions
+         (message_id, conversation_id, message_sender_id, message_body, deleted_by)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [message.id, message.conversation_id, message.sender_id, message.body, req.user.id]
+    );
+
+    await client.query(
+      `UPDATE chat_messages
+       SET deleted_at = NOW(), deleted_by = $1
+       WHERE id = $2`,
+      [req.user.id, message.id]
+    );
+
+    await client.query("COMMIT");
+
+    const io = req.app.locals.io;
+    if (io) io.to(`chat:conversation:${message.conversation_id}`).emit("chat:deleted", {
+      message_id: message.id,
+      conversation_id: message.conversation_id,
+      deleted_by: req.user.id
+    });
+
+    res.json({ ok: true, message_id: message.id });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("CHAT DELETE ERROR:", error);
+    res.status(500).json({ message: "Unable to delete message." });
+  } finally {
+    client.release();
+  }
+});
+
+/* Backward-compatible management history endpoint. Normal users receive only
+   their own messages; Admin/HR/CEO can monitor all visible chat history. */
 router.get("/chat", async (req, res) => {
   const rows = isManagement(req.user)
     ? await q(
-        `SELECT
-           c.*,
-           s.full_name AS sender_name,
-           r.full_name AS receiver_name
+        `SELECT c.*, s.full_name AS sender_name, r.full_name AS receiver_name
          FROM chat_messages c
          LEFT JOIN users s ON s.id = c.sender_id
          LEFT JOIN users r ON r.id = c.receiver_id
+         WHERE c.deleted_at IS NULL
          ORDER BY c.created_at DESC`
       )
     : await q(
-        `SELECT
-           c.*,
-           s.full_name AS sender_name,
-           r.full_name AS receiver_name
+        `SELECT c.*, s.full_name AS sender_name, r.full_name AS receiver_name
          FROM chat_messages c
          LEFT JOIN users s ON s.id = c.sender_id
          LEFT JOIN users r ON r.id = c.receiver_id
-         WHERE c.sender_id = $1
-            OR c.receiver_id = $1
+         WHERE (c.sender_id = $1 OR c.receiver_id = $1)
+           AND c.deleted_at IS NULL
          ORDER BY c.created_at DESC`,
         [req.user.id]
       );
@@ -1717,31 +2708,38 @@ router.get("/chat", async (req, res) => {
   res.json(rows);
 });
 
+/* Legacy direct-send endpoint retained for compatibility. New Chat UI uses
+   conversation-scoped POST /chat/conversations/:id/messages. */
 router.post("/chat", async (req, res) => {
   const receiverId = Number(req.body.receiver_id);
   const body = String(req.body.body || "").trim();
 
   if (!receiverId || !body) {
-    return res.status(400).json({
-      message: "Receiver and message are required"
-    });
+    return res.status(400).json({ message: "Receiver and message are required" });
   }
 
+  if (receiverId === Number(req.user.id)) {
+    return res.status(400).json({ message: "You cannot message yourself." });
+  }
+
+  const target = await q(
+    `SELECT id FROM users WHERE id = $1 AND UPPER(COALESCE(employment_status, 'ACTIVE')) = 'ACTIVE'`,
+    [receiverId]
+  );
+  if (!target[0]) return res.status(404).json({ message: "Receiver not found or inactive." });
+
+  const conversationId = await ensureDirectConversation(req.user.id, receiverId);
   const rows = await q(
-    `INSERT INTO chat_messages (
-      sender_id, receiver_id, body, message_type
-    )
-    VALUES ($1,$2,$3,$4)
-    RETURNING *`,
-    [
-      req.user.id,
-      receiverId,
-      body,
-      req.body.message_type || "text"
-    ]
+    `INSERT INTO chat_messages (conversation_id, sender_id, receiver_id, body, message_type)
+     VALUES ($1, $2, $3, $4, 'text')
+     RETURNING *`,
+    [conversationId, req.user.id, receiverId, body]
   );
 
-  res.status(201).json(rows[0]);
+  const message = rows[0];
+  const io = req.app.locals.io;
+  if (io) io.to(`chat:conversation:${conversationId}`).emit("chat:message", message);
+  res.status(201).json(message);
 });
 
 /* ==================== LOGIN LOGS ==================== */
@@ -1763,6 +2761,108 @@ router.get("/logs", async (req, res) => {
       );
 
   res.json(rows);
+});
+
+/* ==================== SALARY APPROVAL ====================
+   Employee/Intern salary: HR or Admin may review/finalize.
+   HR/Admin salary: CEO has final approval authority.
+   CEO salary: not generated by the monthly payroll job. */
+router.put("/salary/:id/approval", auth, async (req, res) => {
+  try {
+    const salaryId = Number(req.params.id);
+    if (!Number.isInteger(salaryId)) {
+      return res.status(400).json({ message: "Invalid salary ID" });
+    }
+
+    const { action = "approve" } = req.body || {};
+    const current = await q(
+      `SELECT s.*, u.role AS employee_role, u.full_name
+       FROM salary_records s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.id = $1`,
+      [salaryId]
+    );
+
+    if (!current[0]) {
+      return res.status(404).json({ message: "Salary record not found" });
+    }
+
+    const salary = current[0];
+    const actor = String(req.user.role || "").toUpperCase();
+    const targetRole = String(salary.employee_role || "").toUpperCase();
+    const managementSalary = ["ADMIN", "HR"].includes(targetRole);
+
+    if (action === "review") {
+      if (managementSalary) {
+        return res.status(403).json({ message: "HR/Admin salary requires CEO approval" });
+      }
+      if (!["HR", "ADMIN", "CEO"].includes(actor)) {
+        return res.status(403).json({ message: "Only HR/Admin/CEO can review employee salary" });
+      }
+      const rows = await q(
+        `UPDATE salary_records
+         SET status = 'Reviewed', reviewed_by = $1, reviewed_at = NOW()
+         WHERE id = $2 AND status IN ('Pending Review', 'Reviewed')
+         RETURNING *`,
+        [req.user.id, salaryId]
+      );
+      if (!rows[0]) return res.status(409).json({ message: "Salary cannot be reviewed in its current state" });
+      return res.json({ ...rows[0], message: "Salary marked as reviewed." });
+    }
+
+    if (action === "send_back") {
+      if (managementSalary && actor !== "CEO") {
+        return res.status(403).json({ message: "Only CEO can send back Admin/HR salary" });
+      }
+      if (!managementSalary && !["HR", "ADMIN", "CEO"].includes(actor)) {
+        return res.status(403).json({ message: "Only HR/Admin/CEO can send salary back" });
+      }
+      const rows = await q(
+        `UPDATE salary_records
+         SET status = 'Pending Review', reviewed_by = NULL, reviewed_at = NULL,
+             processed_by = NULL, processed_at = NULL
+         WHERE id = $1
+         RETURNING *`,
+        [salaryId]
+      );
+      return res.json({ ...rows[0], message: "Salary sent back for review." });
+    }
+
+    if (managementSalary) {
+      if (actor !== "CEO") {
+        return res.status(403).json({ message: "CEO approval is required for Admin/HR salary" });
+      }
+    } else if (!["HR", "ADMIN", "CEO"].includes(actor)) {
+      return res.status(403).json({ message: "Only HR/Admin/CEO can approve employee salary" });
+    }
+
+    const rows = await q(
+      `UPDATE salary_records
+       SET status = 'Processed',
+           reviewed_by = COALESCE(reviewed_by, $1),
+           reviewed_at = COALESCE(reviewed_at, NOW()),
+           approved_by = $1,
+           approved_at = NOW(),
+           processed_by = $1,
+           processed_at = NOW()
+       WHERE id = $2 AND status IN ('Pending Review', 'Reviewed')
+       RETURNING *`,
+      [req.user.id, salaryId]
+    );
+    if (!rows[0]) return res.status(409).json({ message: "Salary is already processed or unavailable" });
+
+    // Notify the salary recipient.
+    await q(
+      `INSERT INTO notifications (user_id, title, body)
+       VALUES ($1, $2, $3)`,
+      [salary.user_id, "Salary Processed", `Your ${salary.month} salary has been processed.`]
+    );
+
+    return res.json({ ...rows[0], message: "Salary processed successfully." });
+  } catch (error) {
+    console.error("SALARY APPROVAL ERROR:", error);
+    return res.status(500).json({ message: "Unable to update salary." });
+  }
 });
 
 module.exports = router;
