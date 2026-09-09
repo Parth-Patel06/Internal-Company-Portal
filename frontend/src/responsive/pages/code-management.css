@@ -1,0 +1,26 @@
+@media (max-width: 1180px) {
+  .codeWorkspace { grid-template-columns: 1fr; }
+  .codeRepoList { max-height: 190px; }
+}
+@media (max-width: 900px) {
+  .codeWorkspace, .codeRepoDetail, .codeTableWrap { min-width: 0; max-width: 100%; }
+  .codeTableWrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .codeMRGrid { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+  .codeManagementPage .moduleTop { align-items: stretch; }
+  .codeProjectPicker, .codeManagementPage .moduleTop > .primary { width: 100%; min-width: 0; }
+  .codeRepoDetail { padding: 14px; }
+  .codeRepoHeader, .codeVersionItem, .codeMRTop { flex-direction: column; }
+  .codeAccessBadge { align-self: flex-start; }
+  .codeUploadBox, .codeMRForm { padding: 13px; }
+  .codeMRActions { flex-wrap: wrap; }
+}
+@media (max-width: 560px) {
+  .codeRepoList { max-height: 170px; }
+  .codeRepoItem { grid-template-columns: 1fr; }
+  .codeRepoItem span { text-align: left; }
+  .codeTabs { overflow-x: auto; white-space: nowrap; }
+  .codeTabs button { padding: 9px 10px; font-size: 13px; }
+  .codeTable { min-width: 760px; }
+}

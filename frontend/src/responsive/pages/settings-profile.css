@@ -1,0 +1,8 @@
+@media (max-width: 900px) {
+  .appearanceOptions, .detailGrid, .profileOverviewGrid, .profileDetailsGrid { min-width: 0; }
+  .profileEditGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .profileEditGrid, .appearanceOptions { grid-template-columns: 1fr; }
+  .securityTrigger { align-items: flex-start; }
+}

@@ -1,0 +1,7 @@
+@media (max-width: 900px) {
+  .profileHeroContent, .profileOverviewCard, .profileEditCard { min-width: 0; }
+}
+@media (max-width: 600px) {
+  .profileHeroContent { flex-direction: column; align-items: flex-start; }
+  .profileHeroEdit { width: 100%; }
+}

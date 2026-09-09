@@ -1,4 +1,30 @@
 const pool = require("./pool");
+const { PERMISSIONS, roleDefault } = require("./permission-definitions");
+
+
+async function seedPermissionCatalog() {
+  for (const [key, name, module, description, sensitive] of PERMISSIONS) {
+    await pool.query(`
+      INSERT INTO permissions(permission_key, permission_name, module, description, is_sensitive)
+      VALUES($1,$2,$3,$4,$5)
+      ON CONFLICT(permission_key) DO UPDATE SET
+        permission_name=EXCLUDED.permission_name,
+        module=EXCLUDED.module,
+        description=EXCLUDED.description,
+        is_sensitive=EXCLUDED.is_sensitive
+    `, [key, name, module, description, sensitive]);
+  }
+  for (const role of ['CEO','ADMIN','HR','EMPLOYEE','INTERN']) {
+    for (const [key] of PERMISSIONS) {
+      const { rows } = await pool.query('SELECT id FROM permissions WHERE permission_key=$1', [key]);
+      await pool.query(`
+        INSERT INTO role_permissions(role, permission_id, access)
+        VALUES($1,$2,$3)
+        ON CONFLICT(role, permission_id) DO UPDATE SET access=EXCLUDED.access, updated_at=NOW()
+      `, [role, rows[0].id, roleDefault(role, key)]);
+    }
+  }
+}
 
 (async () => {
   try {
@@ -237,9 +263,9 @@ const pool = require("./pool");
 
         user_id INT REFERENCES users(id),
 
-        login_at TIMESTAMP DEFAULT NOW(),
+        login_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
 
-        logout_at TIMESTAMP
+        logout_at TIMESTAMPTZ
       );
 
       CREATE TABLE IF NOT EXISTS repositories (
@@ -256,36 +282,133 @@ const pool = require("./pool");
         updated_at TIMESTAMP DEFAULT NOW()
       );
 
-      CREATE TABLE IF NOT EXISTS chat_messages (
+
+      /* Code Management */
+      CREATE TABLE IF NOT EXISTS repository_versions (
         id SERIAL PRIMARY KEY,
+        repository_id INT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+        version_no INT NOT NULL,
+        message TEXT NOT NULL,
+        created_by INT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(repository_id, version_no)
+      );
 
-        sender_id INT REFERENCES users(id),
+      CREATE TABLE IF NOT EXISTS repository_files (
+        id SERIAL PRIMARY KEY,
+        repository_id INT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+        version_id INT REFERENCES repository_versions(id) ON DELETE SET NULL,
+        path TEXT NOT NULL,
+        original_name VARCHAR(255) NOT NULL,
+        storage_name VARCHAR(255) NOT NULL,
+        mime_type VARCHAR(150),
+        size BIGINT DEFAULT 0,
+        uploaded_by INT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(repository_id, path)
+      );
 
-        receiver_id INT REFERENCES users(id),
-
-        body TEXT,
-
-        message_type VARCHAR(20) DEFAULT 'text',
-
+      CREATE TABLE IF NOT EXISTS repository_activity (
+        id SERIAL PRIMARY KEY,
+        repository_id INT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+        action VARCHAR(60) NOT NULL,
+        target_type VARCHAR(40),
+        target_id INT,
+        target_name TEXT,
+        details JSONB,
+        created_by INT REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP DEFAULT NOW()
       );
 
-      /* Phase 1 Chat: direct conversations, read state, and audited deletion. */
+      CREATE INDEX IF NOT EXISTS idx_repository_activity_repo
+        ON repository_activity(repository_id, created_at DESC, id DESC);
+
+      CREATE TABLE IF NOT EXISTS repository_merge_requests (
+        id SERIAL PRIMARY KEY,
+        repository_id INT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+        title VARCHAR(200) NOT NULL,
+        description TEXT,
+        source_branch VARCHAR(100) NOT NULL,
+        target_branch VARCHAR(100) NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
+        created_by INT REFERENCES users(id) ON DELETE SET NULL,
+        reviewed_by INT REFERENCES users(id) ON DELETE SET NULL,
+        reviewed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_repository_versions_repo
+        ON repository_versions(repository_id, version_no DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_repository_files_repo
+        ON repository_files(repository_id, path);
+
+      CREATE INDEX IF NOT EXISTS idx_repository_mr_repo
+        ON repository_merge_requests(repository_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id SERIAL PRIMARY KEY,
+        sender_id INT REFERENCES users(id),
+        receiver_id INT REFERENCES users(id),
+        body TEXT,
+        message_type VARCHAR(20) DEFAULT 'text',
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      /* Chat Phase 2: direct + group conversations. */
       CREATE TABLE IF NOT EXISTS chat_conversations (
         id SERIAL PRIMARY KEY,
         conversation_type VARCHAR(20) NOT NULL DEFAULT 'direct',
-        user_one_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        user_two_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        user_one_id INT REFERENCES users(id) ON DELETE CASCADE,
+        user_two_id INT REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(100),
+        created_by INT REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP DEFAULT NOW(),
-        UNIQUE (conversation_type, user_one_id, user_two_id),
-        CHECK (user_one_id <> user_two_id)
+        CHECK (
+          (conversation_type = 'direct' AND user_one_id IS NOT NULL AND user_two_id IS NOT NULL AND user_one_id <> user_two_id)
+          OR
+          (conversation_type = 'group' AND name IS NOT NULL AND created_by IS NOT NULL)
+        )
       );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_direct_pair
+        ON chat_conversations(conversation_type, user_one_id, user_two_id)
+        WHERE conversation_type = 'direct';
+
+      ALTER TABLE chat_conversations
+        ADD COLUMN IF NOT EXISTS name VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS created_by INT REFERENCES users(id) ON DELETE SET NULL;
+
+      ALTER TABLE chat_conversations
+        ALTER COLUMN user_one_id DROP NOT NULL,
+        ALTER COLUMN user_two_id DROP NOT NULL;
 
       ALTER TABLE chat_messages
         ADD COLUMN IF NOT EXISTS conversation_id INT REFERENCES chat_conversations(id) ON DELETE CASCADE,
         ADD COLUMN IF NOT EXISTS read_at TIMESTAMP,
         ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP,
-        ADD COLUMN IF NOT EXISTS deleted_by INT REFERENCES users(id);
+        ADD COLUMN IF NOT EXISTS deleted_by INT REFERENCES users(id),
+        ADD COLUMN IF NOT EXISTS attachment_url TEXT,
+        ADD COLUMN IF NOT EXISTS attachment_name VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS attachment_mime VARCHAR(150),
+        ADD COLUMN IF NOT EXISTS attachment_size BIGINT;
+
+      CREATE TABLE IF NOT EXISTS chat_members (
+        id SERIAL PRIMARY KEY,
+        conversation_id INT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        is_admin BOOLEAN DEFAULT FALSE,
+        joined_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(conversation_id, user_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_group_message_reads (
+        message_id INT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        read_at TIMESTAMP DEFAULT NOW(),
+        PRIMARY KEY(message_id, user_id)
+      );
 
       CREATE TABLE IF NOT EXISTS chat_message_deletions (
         id SERIAL PRIMARY KEY,
@@ -301,26 +424,34 @@ const pool = require("./pool");
         ON chat_conversations(user_one_id);
       CREATE INDEX IF NOT EXISTS idx_chat_conversations_user_two
         ON chat_conversations(user_two_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_members_conversation
+        ON chat_members(conversation_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_members_user
+        ON chat_members(user_id);
       CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_created
         ON chat_messages(conversation_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_type
+        ON chat_messages(message_type);
+
       CREATE INDEX IF NOT EXISTS idx_chat_messages_unread
         ON chat_messages(receiver_id, read_at)
         WHERE read_at IS NULL AND deleted_at IS NULL;
       CREATE INDEX IF NOT EXISTS idx_chat_message_deletions_message
         ON chat_message_deletions(message_id);
 
-      /* Attach any legacy direct messages to the new conversation model. */
-      INSERT INTO chat_conversations (conversation_type, user_one_id, user_two_id)
+      /* Attach legacy direct messages to the direct conversation model. */
+      INSERT INTO chat_conversations (conversation_type, user_one_id, user_two_id, created_by)
       SELECT DISTINCT
         'direct',
         LEAST(sender_id, receiver_id),
-        GREATEST(sender_id, receiver_id)
+        GREATEST(sender_id, receiver_id),
+        LEAST(sender_id, receiver_id)
       FROM chat_messages
       WHERE conversation_id IS NULL
         AND sender_id IS NOT NULL
         AND receiver_id IS NOT NULL
         AND sender_id <> receiver_id
-      ON CONFLICT (conversation_type, user_one_id, user_two_id) DO NOTHING;
+      ON CONFLICT DO NOTHING;
 
       UPDATE chat_messages m
       SET conversation_id = c.id
@@ -329,6 +460,17 @@ const pool = require("./pool");
         AND c.conversation_type = 'direct'
         AND c.user_one_id = LEAST(m.sender_id, m.receiver_id)
         AND c.user_two_id = GREATEST(m.sender_id, m.receiver_id);
+
+      /* Ensure every participant of an existing direct chat is also a member. */
+      INSERT INTO chat_members (conversation_id, user_id, is_admin)
+      SELECT c.id, x.user_id, FALSE
+      FROM chat_conversations c
+      CROSS JOIN LATERAL (
+        VALUES (c.user_one_id), (c.user_two_id)
+      ) AS x(user_id)
+      WHERE c.conversation_type = 'direct'
+        AND x.user_id IS NOT NULL
+      ON CONFLICT (conversation_id, user_id) DO NOTHING;
 
       CREATE TABLE IF NOT EXISTS notifications (
         id SERIAL PRIMARY KEY,
@@ -955,6 +1097,144 @@ const pool = require("./pool");
       );
     `);
 
+
+    /*
+     * ============================================================
+     * GRANULAR PERMISSIONS + EMPLOYEE HISTORY
+     * ============================================================
+     */
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS permissions (
+        id SERIAL PRIMARY KEY,
+        permission_key VARCHAR(120) UNIQUE NOT NULL,
+        permission_name VARCHAR(160) NOT NULL,
+        module VARCHAR(60) NOT NULL,
+        description TEXT,
+        is_sensitive BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS role_permissions (
+        id SERIAL PRIMARY KEY,
+        role VARCHAR(20) NOT NULL,
+        permission_id INT NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+        access VARCHAR(10) NOT NULL CHECK (access IN ('ALLOW','DENY')),
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(role, permission_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS user_permissions (
+        id SERIAL PRIMARY KEY,
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        permission_id INT NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+        access VARCHAR(10) NOT NULL CHECK (access IN ('ALLOW','DENY')),
+        granted_by INT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(user_id, permission_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS permission_audit_log (
+        id SERIAL PRIMARY KEY,
+        target_user_id INT REFERENCES users(id) ON DELETE SET NULL,
+        permission_id INT REFERENCES permissions(id) ON DELETE SET NULL,
+        old_access VARCHAR(10),
+        new_access VARCHAR(10),
+        changed_by INT REFERENCES users(id) ON DELETE SET NULL,
+        reason TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS role_change_log (
+        id SERIAL PRIMARY KEY,
+        user_id INT REFERENCES users(id) ON DELETE SET NULL,
+        old_role VARCHAR(20),
+        new_role VARCHAR(20),
+        old_level VARCHAR(30),
+        new_level VARCHAR(30),
+        changed_by INT REFERENCES users(id) ON DELETE SET NULL,
+        reason TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS promotion_history (
+        id SERIAL PRIMARY KEY,
+        user_id INT REFERENCES users(id) ON DELETE SET NULL,
+        old_level VARCHAR(30),
+        new_level VARCHAR(30),
+        old_role VARCHAR(20),
+        new_role VARCHAR(20),
+        effective_date DATE,
+        reason TEXT,
+        promoted_by INT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_user_permissions_user
+        ON user_permissions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_role_permissions_role
+        ON role_permissions(role);
+      CREATE INDEX IF NOT EXISTS idx_permission_audit_target
+        ON permission_audit_log(target_user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_role_change_user
+        ON role_change_log(user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_promotion_history_user
+        ON promotion_history(user_id, created_at DESC);
+    `);
+
+    /*
+     * LOGIN TIMESTAMP MIGRATION
+     *
+     * Older versions used TIMESTAMP without a timezone. The application
+     * wrote those values in UTC, so convert the existing values explicitly
+     * to TIMESTAMPTZ before storing all future login/logout timestamps as
+     * absolute instants.
+     */
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'login_logs'
+            AND column_name = 'login_at'
+            AND data_type = 'timestamp without time zone'
+        ) THEN
+          ALTER TABLE login_logs
+            ALTER COLUMN login_at TYPE TIMESTAMPTZ
+              USING login_at AT TIME ZONE 'UTC';
+
+          ALTER TABLE login_logs
+            ALTER COLUMN logout_at TYPE TIMESTAMPTZ
+              USING CASE
+                WHEN logout_at IS NULL THEN NULL
+                ELSE logout_at AT TIME ZONE 'UTC'
+              END;
+        END IF;
+
+        ALTER TABLE login_logs
+          ALTER COLUMN login_at SET DEFAULT CURRENT_TIMESTAMP;
+      END $$;
+    `);
+
+    // Repair duplicate open sessions created by older versions before adding
+    // the one-open-session constraint. Keep only the newest open session per user.
+    await pool.query(`
+      WITH ranked AS (
+        SELECT id,
+               ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY login_at DESC, id DESC) AS rn
+        FROM login_logs
+        WHERE logout_at IS NULL
+      )
+      UPDATE login_logs l
+      SET logout_at = CURRENT_TIMESTAMP
+      FROM ranked r
+      WHERE l.id = r.id AND r.rn > 1;
+    `);
+
     /*
      * ============================================================
      * INDEXES
@@ -967,6 +1247,10 @@ const pool = require("./pool");
 
       CREATE INDEX IF NOT EXISTS idx_login_logs_user_open
       ON login_logs (user_id, login_at DESC)
+      WHERE logout_at IS NULL;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_login_logs_one_open_session
+      ON login_logs (user_id)
       WHERE logout_at IS NULL;
 
       CREATE INDEX IF NOT EXISTS idx_notifications_user_unread
@@ -1006,6 +1290,8 @@ const pool = require("./pool");
         created_at DESC
       );
     `);
+
+    await seedPermissionCatalog();
 
     console.log("");
     console.log("====================================");

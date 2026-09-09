@@ -1,0 +1,45 @@
+/* Global responsive foundation. The existing styles.css remains the visual baseline. */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root { max-width: 100%; min-height: 100%; }
+html, body { margin: 0; }
+body { overflow-x: hidden; }
+
+img, svg, video, canvas { max-width: 100%; }
+
+.app, .app > main, .content, .content > * { min-width: 0; }
+.content { width: 100%; }
+.tableWrap { max-width: 100%; }
+
+@media (max-width: 1200px) {
+  .content { padding-left: 28px; padding-right: 28px; }
+  header { padding-left: 24px; padding-right: 24px; }
+}
+
+@media (max-width: 900px) {
+  .content { padding: 28px 20px 60px; }
+  header { min-width: 0; }
+  header > span { min-width: 0; overflow: hidden; }
+  header > span strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .moduleTop, .toolbar { flex-wrap: wrap; }
+  .moduleTop > *, .toolbar > * { min-width: 0; max-width: 100%; }
+  .formGrid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 700px) {
+  .content { padding: 22px 14px 44px; }
+  .content h1 { font-size: clamp(26px, 7vw, 32px); }
+  .content h2 { font-size: 19px; }
+
+  .moduleTop, .toolbar { align-items: stretch; gap: 10px; }
+  .moduleTop .primary, .toolbar .primary { width: 100%; }
+
+  .detailGrid { grid-template-columns: 1fr !important; }
+  .portalModal { max-height: calc(100svh - 20px); overflow-y: auto; }
+  .portalModalActions { flex-wrap: wrap; }
+}
+
+@media (max-width: 480px) {
+  .content { padding-left: 12px; padding-right: 12px; }
+  .tableWrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}

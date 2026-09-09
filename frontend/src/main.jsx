@@ -16,14 +16,36 @@ import ProjectEditModal from "./components/ProjectEditModal";
 import ProjectsTable from "./components/ProjectsTable";
 import CompanyCalendar from "./components/CompanyCalendar";
 import CreateUser from "./components/CreateUser";
+import Chat from "./components/Chat";
+import MessageMonitoring from "./components/MessageMonitoring";
+import CodeManagement from "./components/CodeManagement";
+import Profile from "./components/Profile";
 import ManagementActionTable from "./components/ManagementActionTable";
 import List from "./components/List";
 import Card from "./components/Card";
-import Chat from "./components/Chat";
-import { normalizeRole, buildSidebarGroups, all } from "./utils/navigation";
+import { normalizeRole, buildSidebarGroups, all, hasPermission, hasAnyPermission } from "./utils/navigation";
 import triobyteLogo from "./Triobyte.jpeg";
+import ResponsiveLayout from "./responsive/ResponsiveLayout";
+import "./responsive/global.css";
+import "./responsive/components/header.css";
+import "./responsive/components/sidebar.css";
+import "./responsive/pages/dashboard.css";
+import "./responsive/pages/employees.css";
+import "./responsive/pages/attendance.css";
+import "./responsive/pages/management.css";
+import "./responsive/pages/projects.css";
+import "./responsive/pages/reports.css";
+import "./responsive/pages/settings-profile.css";
+import "./responsive/pages/login.css";
+import "./responsive/pages/chat.css";
+import "./responsive/pages/code-management.css";
+import "./responsive/pages/message-monitoring.css";
+import "./responsive/pages/calendar.css";
+import "./responsive/pages/notifications.css";
+import "./responsive/pages/profile.css";
+import "./responsive/components/overlays.css";
 
-function EmployeeManagement({ rows, reload, internsOnly, currentRole, currentUserId }) {
+function EmployeeManagement({ rows, reload, internsOnly, currentRole, currentUserId, permissions }) {
   const [selectedUser, setSelectedUser] = useState(null);
   const [offboardingOpen, setOffboardingOpen] = useState(false);
   const [cancelTarget, setCancelTarget] = useState(null);
@@ -34,9 +56,11 @@ function EmployeeManagement({ rows, reload, internsOnly, currentRole, currentUse
   });
   const [message, setMessage] = useState({ type: "", text: "" });
   const [busy, setBusy] = useState(false);
+  const [createEmployeeOpen, setCreateEmployeeOpen] = useState(false);
 
   const role = normalizeRole(currentRole);
   const management = ["CEO", "ADMIN", "HR"].includes(role);
+  const canCreateEmployee = hasPermission(permissions, "employees.create");
 
   function today() {
     return new Date().toISOString().slice(0, 10);
@@ -154,8 +178,17 @@ function EmployeeManagement({ rows, reload, internsOnly, currentRole, currentUse
 
   return (
     <>
-      <div className="toolbar">
+      <div className="toolbar employeeToolbar">
         <p>{internsOnly ? "Track intern details and restrictions." : "Manage company employees and create new accounts."}</p>
+        {!internsOnly && canCreateEmployee && (
+          <button
+            type="button"
+            className="createEmployeeButton"
+            onClick={() => setCreateEmployeeOpen(true)}
+          >
+            + Create Employee
+          </button>
+        )}
       </div>
 
       {message.text && (
@@ -181,7 +214,46 @@ function EmployeeManagement({ rows, reload, internsOnly, currentRole, currentUse
         onBlockToggle={toggleBlock}
         onOffboard={openOffboarding}
         onCancelOffboarding={setCancelTarget}
+        onEmployeeUpdated={reload}
+        permissions={permissions}
       />
+
+      {createEmployeeOpen && !internsOnly && (
+        <div
+          className="portalModalBackdrop createEmployeeModalBackdrop"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
+              setCreateEmployeeOpen(false);
+            }
+          }}
+        >
+          <div
+            className="portalModal createEmployeeModal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-employee-title"
+          >
+            <div className="portalModalHeader">
+              <div>
+                <div className="eyebrow">EMPLOYEE MANAGEMENT</div>
+                <h2 id="create-employee-title">Create New Employee</h2>
+              </div>
+              <button
+                type="button"
+                className="modalClose"
+                onClick={() => setCreateEmployeeOpen(false)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="portalModalBody createEmployeeModalBody">
+              <CreateUser currentRole={currentRole} onCreated={reload} />
+            </div>
+          </div>
+        </div>
+      )}
 
       {offboardingOpen && selectedUser && (
         <div
@@ -333,6 +405,30 @@ function EmployeeManagement({ rows, reload, internsOnly, currentRole, currentUse
     </>
   );
 }
+const headerSectionMap = {
+  Dashboard: "Workspace",
+  Projects: "Workspace",
+  Tasks: "Workspace",
+  Chat: "Workspace",
+  Calendar: "Workspace",
+  Employees: "People",
+  "Intern Management": "People",
+  Attendance: "People",
+  "Leave Management": "People",
+  "Daily Work": "People",
+  "Code Management": "Tools",
+  "Message Monitoring": "Tools",
+  Announcements: "Tools",
+  Organization: "People",
+  Profile: "Account",
+  Settings: "Account",
+};
+
+const headerPageMap = {
+  Employees: "Employee",
+  "Intern Management": "Intern Management",
+};
+
 function App() {
   const [me, setMe] = useState(null);
   const [page, setPage] = useState("Dashboard");
@@ -348,13 +444,53 @@ function App() {
   const profileMenuRef = useRef(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [mobileViewport, setMobileViewport] = useState(() => typeof window !== "undefined" && window.innerWidth <= 900);
   const [openSidebarGroups, setOpenSidebarGroups] = useState({});
+
+  useEffect(() => {
+    const handleViewportChange = () => {
+      const isMobile = window.innerWidth <= 900;
+      setMobileViewport(isMobile);
+      if (!isMobile) setMobileSidebarOpen(false);
+    };
+
+    handleViewportChange();
+    window.addEventListener("resize", handleViewportChange);
+    return () => window.removeEventListener("resize", handleViewportChange);
+  }, []);
+
+  useEffect(() => {
+    document.body.style.overflow = mobileViewport && mobileSidebarOpen ? "hidden" : "";
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [mobileViewport, mobileSidebarOpen]);
+
+  function toggleResponsiveNavigation() {
+    if (mobileViewport) {
+      setMobileSidebarOpen((open) => !open);
+      return;
+    }
+    setSidebarCollapsed((value) => !value);
+  }
+
+  function closeResponsiveNavigation() {
+    if (mobileViewport) setMobileSidebarOpen(false);
+  }
+  const [permissions, setPermissions] = useState(null);
 
   async function loadMe() {
     try {
       const result = await api("/api/me");
 
       setMe(result);
+      try {
+        const permissionResult = await api("/api/me/permissions");
+        setPermissions(permissionResult.permissions || permissionResult || []);
+      } catch (_) {
+        setPermissions(null);
+      }
       return result;
     } catch (err) {
       clearToken();
@@ -435,6 +571,7 @@ function App() {
 
     const paths = {
   Dashboard: "dashboard",
+  Organization: "users",
   Employees: "users",
   "Intern Management": "users",
   Projects: "projects",
@@ -442,12 +579,18 @@ function App() {
   Attendance: "attendance",
   "Leave Management": "leave",
   "Daily Work": "daily-work",
-  Salary: "salary",
-  Overtime: "overtime",
+  // Salary: "salary",
+  // Overtime: "overtime",
   Announcements: "announcements",
   "Code Management": "repos",
   Chat: "chat",
+  "Message Monitoring": "chat/monitoring",
 };
+
+    // Chat and Message Monitoring load their own data. Do not call the generic
+    // module endpoints for them; doing so can overwrite loading/data state and
+    // is unnecessary.
+    if (page === "Chat" || page === "Message Monitoring") return;
 
     const path = paths[page];
 
@@ -516,23 +659,14 @@ if (requiresPasswordChange) {
     window.location.reload();
   }
 
-  const sidebarMenuGroups = buildSidebarGroups(me.role);
+  const sidebarMenuGroups = buildSidebarGroups(me.role, permissions);
   const activeGroupId = sidebarMenuGroups.find((group) =>
     group.items.some(([name]) => name === page)
   )?.id;
 
   return (
-    <div className={`app ${sidebarCollapsed ? "sidebarCollapsed" : ""}`}>
+    <div className={`app ${sidebarCollapsed ? "sidebarCollapsed" : ""} ${mobileViewport ? "mobileViewport" : ""} ${mobileSidebarOpen ? "mobileSidebarOpen" : ""}`}>
       <aside>
-        <button
-          type="button"
-          className="sidebarToggle"
-          onClick={() => setSidebarCollapsed((value) => !value)}
-          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-        >
-          {sidebarCollapsed ? <I.ChevronRight size={18} /> : <I.ChevronLeft size={18} />}
-        </button>
 
         <div className="brand">
           <img src={triobyteLogo} className="brandImage" alt="TrioByte" />
@@ -546,7 +680,9 @@ if (requiresPasswordChange) {
           {sidebarMenuGroups.map((group) => {
             const GroupIcon = I[group.icon] || I.Circle;
             const isActiveGroup = group.id === activeGroupId;
-            const isOpen = sidebarCollapsed ? false : (openSidebarGroups[group.id] ?? isActiveGroup);
+            const isOpen = mobileViewport
+              ? (openSidebarGroups[group.id] ?? isActiveGroup)
+              : (sidebarCollapsed ? false : (openSidebarGroups[group.id] ?? isActiveGroup));
 
             return (
               <div
@@ -579,7 +715,10 @@ if (requiresPasswordChange) {
                         <button
                           key={name}
                           className={`navSubmenuItem ${page === name ? "active" : ""}`}
-                          onClick={() => setPage(name)}
+                          onClick={() => {
+                            setPage(name);
+                            closeResponsiveNavigation();
+                          }}
                         >
                           <Icon size={17} />
                           <span className="navLabel">{name}</span>
@@ -595,7 +734,7 @@ if (requiresPasswordChange) {
 
         <div className="user">
           <div className="avatar">
-            {me.full_name?.[0] || "U"}
+            {me.photo_url ? <img className="topAvatarImage" src={me.photo_url} alt="Profile" /> : (me.full_name?.[0] || "U")}
           </div>
 
           <div>
@@ -615,12 +754,18 @@ if (requiresPasswordChange) {
         </div>
       </aside>
 
+      <ResponsiveLayout
+        mobileOpen={mobileViewport ? mobileSidebarOpen : false}
+        onToggle={toggleResponsiveNavigation}
+        onClose={closeResponsiveNavigation}
+      />
+
       <main>
         <header>
-          <span>
-            <span className="workspaceLabel">Workspace</span>
+          <span className="pageBreadcrumb">
+            <span className="workspaceLabel">{headerSectionMap[page] || "Workspace"}</span>
             <span className="headerSlash">/</span>
-            <strong>{page}</strong>
+            <strong>{headerPageMap[page] || page}</strong>
           </span>
 
           <div className="headerActions">
@@ -670,14 +815,14 @@ if (requiresPasswordChange) {
                 aria-expanded={profileMenuOpen}
                 title="Account"
               >
-                {me.full_name?.[0] || "U"}
+                {me.photo_url ? <img className="topAvatarImage" src={me.photo_url} alt="Profile" /> : (me.full_name?.[0] || "U")}
               </button>
 
               {profileMenuOpen && (
                 <div className="profileDropdown">
                   <div className="profileDropdownUser">
                     <div className="profileDropdownAvatar">
-                      {me.full_name?.[0] || "U"}
+                      {me.photo_url ? <img className="topAvatarImage" src={me.photo_url} alt="Profile" /> : (me.full_name?.[0] || "U")}
                     </div>
                     <div>
                       <b>{me.full_name}</b>
@@ -722,12 +867,16 @@ if (requiresPasswordChange) {
         />
 
         <NotificationPanel
-          open={notificationOpen}
-          onClose={() => setNotificationOpen(false)}
-          onUnreadChange={setUnreadCount}
-        />
+  open={notificationOpen}
+  onClose={() => setNotificationOpen(false)}
+  onUnreadChange={setUnreadCount}
+  onNavigate={(targetPage) => {
+    setPage(targetPage);
+    setNotificationOpen(false);
+  }}
+/>
 
-        <section className="content">
+        <section className={`content ${["Chat", "Message Monitoring"].includes(page) ? "contentSpecial" : ""}`}>
           <div className="eyebrow">
             TRIOBYTE PORTAL
           </div>
@@ -749,6 +898,7 @@ if (requiresPasswordChange) {
             setTheme={setTheme}
             refresh={loadMe}
             refreshPage={refreshCurrentPage}
+            permissions={permissions}
           />
         </section>
       </main>
@@ -766,6 +916,7 @@ function Page({
   setTheme,
   refresh,
   refreshPage,
+  permissions,
 }) {
   // ALL HOOKS MUST BE HERE.
   // Never put useState inside an if statement.
@@ -773,25 +924,21 @@ function Page({
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [notice, setNotice] = useState({ type: "", message: "" });
+  const [securityOpen, setSecurityOpen] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [modal, setModal] = useState(null);
   const [modalValues, setModalValues] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
   const [movingProjectId, setMovingProjectId] = useState(null);
-  const [editingProfile, setEditingProfile] = useState(false);
-  const [profileValues, setProfileValues] = useState({
-    full_name: me?.full_name || "",
-    mobile: me?.mobile || "",
-    address: me?.address || ""
-  });
 
   useEffect(() => {
-    setProfileValues({
-      full_name: me?.full_name || "",
-      mobile: me?.mobile || "",
-      address: me?.address || ""
-    });
-  }, [me]);
+    if (notice.type !== "success" || !notice.message) return;
+    const timer = window.setTimeout(() => {
+      setNotice({ type: "", message: "" });
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice.type, notice.message]);
 
   function openModal(type, values = {}) { setModal(type); setModalValues(values); setNotice({ type: "", message: "" }); }
   function closeModal() { if (!submitting) { setModal(null); setModalValues({}); } }
@@ -873,185 +1020,33 @@ function Page({
       <DashboardTasks
         dashboard={dashboard}
         me={me}
-        onRefresh={() => window.location.reload()}
+        onRefresh={refreshPage}
+        permissions={permissions}
       />
     );
   }
 
   if (page === "Profile") {
-    async function saveProfile() {
-      try {
-        setSubmitting(true);
-        setNotice({ type: "", message: "" });
-
-        const result = await api("/api/profile", {
-          method: "PUT",
-          body: {
-            full_name: profileValues.full_name.trim(),
-            mobile: profileValues.mobile.trim(),
-            address: profileValues.address.trim()
-          }
-        });
-
-        setNotice({
-          type: "success",
-          message: result.message || "Profile updated successfully."
-        });
-        setEditingProfile(false);
-        await refresh();
-      } catch (err) {
-        setNotice({
-          type: "error",
-          message: err.message || "Unable to update profile."
-        });
-      } finally {
-        setSubmitting(false);
-      }
-    }
-
-    return (
-      <>
-        {notice.message && (
-          <div className={`formMessage ${notice.type}`}>
-            {notice.message}
-          </div>
-        )}
-
-        <div className="profile card">
-          <div className="profileHead">
-            <div className="photo level">
-              {me.full_name?.[0] || "U"}
-            </div>
-
-            <div>
-              <h2>{me.full_name}</h2>
-              <p>
-                {me.designation || "—"}
-                {" · "}
-                {me.department || "—"}
-              </p>
-            </div>
-
-            <button
-              className="primary profileEditButton"
-              onClick={() => {
-                setEditingProfile((value) => !value);
-                setNotice({ type: "", message: "" });
-              }}
-              disabled={submitting}
-            >
-              {editingProfile ? "Cancel Edit" : "Edit Profile"}
-            </button>
-          </div>
-
-          {editingProfile ? (
-            <div className="profileEditForm">
-              <label className="modalField">
-                <span>Full Name *</span>
-                <input
-                  value={profileValues.full_name}
-                  onChange={(e) =>
-                    setProfileValues((v) => ({
-                      ...v,
-                      full_name: e.target.value
-                    }))
-                  }
-                />
-              </label>
-
-              <label className="modalField">
-                <span>Mobile Number</span>
-                <input
-                  value={profileValues.mobile}
-                  onChange={(e) =>
-                    setProfileValues((v) => ({
-                      ...v,
-                      mobile: e.target.value
-                    }))
-                  }
-                  placeholder="Enter mobile number"
-                />
-              </label>
-
-              <label className="modalField profileAddressField">
-                <span>Address</span>
-                <textarea
-                  value={profileValues.address}
-                  onChange={(e) =>
-                    setProfileValues((v) => ({
-                      ...v,
-                      address: e.target.value
-                    }))
-                  }
-                  placeholder="Enter your address"
-                />
-              </label>
-
-              <div className="profileEditActions">
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => {
-                    setEditingProfile(false);
-                    setProfileForm({
-                      full_name: me?.full_name || "",
-                      mobile: me?.mobile || "",
-                      address: me?.address || "",
-                    });
-                    setProfileMessage("");
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="primary"
-                  onClick={saveProfile}
-                  disabled={submitting}
-                >
-                  {submitting ? "Saving..." : "Save Changes"}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="detailGrid">
-              {[
-                ["Employee ID", me.employee_id],
-                ["Company ID", me.company_id],
-                ["Email", me.email],
-                ["Mobile", me.mobile],
-                ["Address", me.address],
-                ["Department", me.department],
-                ["Designation", me.designation],
-                ["Employee Level", me.employee_level],
-                [
-                  "Joining Date",
-                  me.joining_date
-                    ? String(me.joining_date).slice(0, 10)
-                    : null
-                ],
-                [
-                  "Employment Status",
-                  me.permanent ? "Permanent" :
-                    (me.end_date
-                      ? `Until ${String(me.end_date).slice(0, 10)}`
-                      : "—")
-                ],
-                ["Role", me.role]
-              ].map(([label, value]) => (
-                <div className="detail" key={label}>
-                  <small>{label}</small>
-                  <b>{value || "—"}</b>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </>
-    );
+    return <Profile me={me} refresh={refresh} />;
   }
 
   if (page === "Settings") {
     async function updatePassword() {
+      if (!oldPassword.trim()) {
+        setNotice({ type: "error", message: "Please enter your current password." });
+        return;
+      }
+
+      if (newPassword.length < 6) {
+        setNotice({ type: "error", message: "New password must be at least 6 characters." });
+        return;
+      }
+
+      if (newPassword !== confirmPassword) {
+        setNotice({ type: "error", message: "New password and confirmation do not match." });
+        return;
+      }
+
       try {
         await api("/api/settings/password", {
           method: "PUT",
@@ -1062,9 +1057,10 @@ function Page({
         });
 
         setNotice({ type: "success", message: "Password updated successfully." });
-
         setOldPassword("");
         setNewPassword("");
+        setConfirmPassword("");
+        setSecurityOpen(false);
 
         await refresh();
       } catch (err) {
@@ -1074,64 +1070,139 @@ function Page({
 
     return (
       <>
-        {notice.message && <div className={`formMessage ${notice.type}`}>{notice.message}</div>}
-        <div className="card settings">
-        <h2>Appearance</h2>
+        {notice.message && (
+          <div className={`formMessage ${notice.type}`}>{notice.message}</div>
+        )}
 
-        <div className="themes">
-          {["light", "dark", "accent"].map((currentTheme) => (
+        <div className="settingsPage">
+          <div className="settingsIntro">
+            <p>Manage your portal preferences and account security.</p>
+          </div>
+
+          <section className="settingsSection">
+            <div className="settingsSectionHeader">
+              <div>
+                <span className="settingsIcon">◐</span>
+                <div>
+                  <h2>Appearance</h2>
+                  <p>Choose how the portal looks for you.</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="appearanceOptions">
+              {[
+                ["light", "☼", "Light", "Bright and clean"],
+                ["dark", "☾", "Dark", "Easy on the eyes"],
+                ["accent", "✦", "Accent", "Use the accent theme"],
+              ].map(([currentTheme, icon, title, description]) => (
+                <button
+                  key={currentTheme}
+                  className={`appearanceOption ${theme === currentTheme ? "selected" : ""}`}
+                  onClick={() => {
+                    setTheme(currentTheme);
+                    localStorage.setItem("tb_theme", currentTheme);
+                  }}
+                >
+                  <span className="appearanceIcon">{icon}</span>
+                  <span>
+                    <strong>{title}</strong>
+                    <small>{description}</small>
+                  </span>
+                  {theme === currentTheme && <span className="appearanceCheck">✓</span>}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="settingsSection securitySection">
             <button
-              key={currentTheme}
-              className={
-                theme === currentTheme
-                  ? "selected"
-                  : ""
-              }
+              type="button"
+              className={`securityTrigger ${securityOpen ? "open" : ""}`}
               onClick={() => {
-                setTheme(currentTheme);
-
-                localStorage.setItem(
-                  "tb_theme",
-                  currentTheme
-                );
+                setSecurityOpen((value) => !value);
+                setNotice({ type: "", message: "" });
               }}
             >
-              {currentTheme[0].toUpperCase() +
-                currentTheme.slice(1)}
+              <span className="securityTriggerLeft">
+                <span className="settingsIcon">♙</span>
+                <span>
+                  <strong>Security</strong>
+                  <small>Change your company portal password</small>
+                </span>
+              </span>
+              <span className="securityTriggerRight">
+                <span>{securityOpen ? "Close" : "Change password"}</span>
+                <span className="chevron">{securityOpen ? "⌃" : "›"}</span>
+              </span>
             </button>
-          ))}
-        </div>
 
-        <h2>Security</h2>
+            {securityOpen && (
+              <div className="securityPanel">
+                <div className="securityPanelIntro">
+                  <div className="securityBadge">🔒</div>
+                  <div>
+                    <h3>Update your password</h3>
+                    <p>Enter your current password, then choose a new password for your account.</p>
+                  </div>
+                </div>
 
-        <p>
-          Change your company portal password.
-        </p>
+                <div className="passwordFields">
+                  <label>
+                    Current password
+                    <input
+                      type="password"
+                      placeholder="Enter current password"
+                      value={oldPassword}
+                      onChange={(e) => setOldPassword(e.target.value)}
+                      autoComplete="current-password"
+                    />
+                  </label>
 
-        <input
-          type="password"
-          placeholder="Current password"
-          value={oldPassword}
-          onChange={(e) =>
-            setOldPassword(e.target.value)
-          }
-        />
+                  <label>
+                    New password
+                    <input
+                      type="password"
+                      placeholder="At least 6 characters"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      autoComplete="new-password"
+                    />
+                  </label>
 
-        <input
-          type="password"
-          placeholder="New password"
-          value={newPassword}
-          onChange={(e) =>
-            setNewPassword(e.target.value)
-          }
-        />
+                  <label>
+                    Confirm new password
+                    <input
+                      type="password"
+                      placeholder="Re-enter your new password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      autoComplete="new-password"
+                    />
+                  </label>
+                </div>
 
-        <button
-          className="primary"
-          onClick={updatePassword}
-        >
-          Update Password
-        </button>
+                <div className="securityActions">
+                  <button
+                    type="button"
+                    className="secondaryButton"
+                    onClick={() => {
+                      setOldPassword("");
+                      setNewPassword("");
+                      setConfirmPassword("");
+                      setNotice({ type: "", message: "" });
+                      setSecurityOpen(false);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button type="button" className="primary" onClick={updatePassword}>
+                    Update Password
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
         </div>
       </>
     );
@@ -1141,8 +1212,95 @@ function Page({
     return <CompanyCalendar me={me} />;
   }
 
-  if (page === "Chat") {
-    return <Chat me={me} />;
+  if (page === "Organization") {
+    const employees = Array.isArray(data) ? data : [];
+    const activeEmployees = employees.filter((employee) => !employee.blocked);
+    const inactiveEmployees = employees.filter((employee) => employee.blocked);
+
+    return (
+      <>
+        <div className="grid stats">
+          <Card n={employees.length} t="Total Employees" />
+          <Card n={activeEmployees.length} t="Active Employees" />
+          <Card n={inactiveEmployees.length} t="Inactive Employees" />
+        </div>
+
+        <h2>Employee Status</h2>
+
+        {employees.length === 0 ? (
+          <div className="card">
+            <p>No employees found.</p>
+          </div>
+        ) : (
+          <div className="card" style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  {["Employee", "Employee ID", "Department", "Designation", "Status"].map((heading) => (
+                    <th
+                      key={heading}
+                      style={{
+                        textAlign: "left",
+                        padding: "12px 14px",
+                        borderBottom: "1px solid var(--border)",
+                        fontSize: 12,
+                        letterSpacing: ".05em",
+                      }}
+                    >
+                      {heading}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+
+              <tbody>
+                {employees.map((employee) => {
+                  const active = !employee.blocked;
+
+                  return (
+                    <tr key={employee.id || employee.employee_id}>
+                      <td style={{ padding: "14px", borderBottom: "1px solid var(--border-soft)", fontWeight: 700 }}>
+                        {employee.full_name || "—"}
+                      </td>
+                      <td style={{ padding: "14px", borderBottom: "1px solid var(--border-soft)" }}>
+                        {employee.employee_id || "—"}
+                      </td>
+                      <td style={{ padding: "14px", borderBottom: "1px solid var(--border-soft)" }}>
+                        {employee.department || "—"}
+                      </td>
+                      <td style={{ padding: "14px", borderBottom: "1px solid var(--border-soft)" }}>
+                        {employee.designation || employee.role || "—"}
+                      </td>
+                      <td style={{ padding: "14px", borderBottom: "1px solid var(--border-soft)" }}>
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 7,
+                            fontWeight: 700,
+                            color: active ? "#16804a" : "#b42318",
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: 8,
+                              height: 8,
+                              borderRadius: "50%",
+                              background: active ? "#22a06b" : "#d64545",
+                            }}
+                          />
+                          {active ? "Active" : "Inactive"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </>
+    );
   }
 
   if (
@@ -1163,10 +1321,23 @@ function Page({
         rows={rows}
         currentRole={role}
         currentUserId={me.id}
+        permissions={permissions}
         reload={refreshPage}
         internsOnly={page === "Intern Management"}
       />
     );
+  }
+
+  if (page === "Chat") {
+    return <Chat me={me} permissions={permissions} />;
+  }
+
+  if (page === "Message Monitoring") {
+    return <MessageMonitoring me={me} permissions={permissions} />;
+  }
+
+  if (page === "Code Management") {
+    return <CodeManagement me={me} permissions={permissions} />;
   }
 
   if (
@@ -1175,8 +1346,8 @@ function Page({
       "Attendance",
       "Leave Management",
       "Daily Work",
-      "Salary",
-      "Overtime",
+      // "Salary",
+      // "Overtime",
       "Announcements",
       "Code Management",
       "Chat",
@@ -1234,7 +1405,7 @@ function Page({
               : `${rows.length} record(s)`}
           </p>
 
-          {page === "Projects" && ["CEO", "ADMIN", "HR"].includes(role) && (
+          {page === "Projects" && hasPermission(permissions, "projects.create") && (
   <button
     className="primary"
     onClick={() => openModal("project")}
@@ -1260,13 +1431,13 @@ function Page({
 
           
           {page === "Daily Work" && <button className="primary" onClick={() => openModal("work", { content: "", progress: "50" })}>Add Work Log</button>}
-          {page === "Announcements" && ["CEO", "ADMIN", "HR"].includes(role) && <button className="primary" onClick={() => openModal("announcement", { title: "", content: "" })}>New Announcement</button>}
+          {page === "Announcements" && hasPermission(permissions, "announcements.create") && <button className="primary" onClick={() => openModal("announcement", { title: "", content: "" })}>New Announcement</button>}
         </div>
 
         {notice.message && <div className={`formMessage ${notice.type}`}>{notice.message}</div>}
 
         {modal === "project" && <ProjectCreateModal onClose={closeModal} onCreated={() => { closeModal(); refreshPage(); }} />}
-        {editingProject && <ProjectEditModal project={editingProject} me={me} onClose={() => setEditingProject(null)} onSaved={() => { setEditingProject(null); refreshPage(); }} />}
+        {editingProject && <ProjectEditModal project={editingProject} me={me} permissions={permissions} onClose={() => setEditingProject(null)} onSaved={() => { setEditingProject(null); refreshPage(); }} />}
 
 
         {modal === "leave" && <PortalFormModal title="Request Leave" fields={[{ name: "from_date", label: "From date", type: "date" }, { name: "to_date", label: "To date", type: "date" }, { name: "reason", label: "Reason", type: "textarea", placeholder: "Enter the reason for leave" }]} values={modalValues} setValues={setModalValues} onClose={closeModal} submitting={submitting} onSubmit={() => { if (!modalValues.from_date || !modalValues.to_date) { setNotice({ type: "error", message: "Please select both leave dates." }); return; } submit("/api/leave", { from_date: modalValues.from_date, to_date: modalValues.to_date, reason: modalValues.reason || "" }); }} />}
@@ -1282,30 +1453,33 @@ function Page({
             onEdit={setEditingProject}
             onNextPhase={moveProjectToNextPhase}
             movingId={movingProjectId}
+            permissions={permissions}
           />
         ) : page === "Leave Management" ? (
           <ManagementActionTable
             rows={rows}
             fields={fields}
             type="leave"
-            canManage={["CEO", "ADMIN", "HR"].includes(role)}
+            canManage={hasAnyPermission(permissions, ["leave.approve", "leave.reject"])}
             onStatusChange={updateRecordStatus}
             role={role}
+            permissions={permissions}
           />
         ) : page === "Salary" ? (
           <ManagementActionTable
             rows={rows}
             fields={fields}
             type="salary"
-            canManage={["CEO", "ADMIN", "HR"].includes(role)}
+            canManage={hasAnyPermission(permissions, ["salary.review", "salary.approve", "salary.process"])}
             onStatusChange={updateRecordStatus}
             role={role}
+            permissions={permissions}
           />
         ) : (
           <List rows={rows} fields={fields} />
         )}
 
-        {page === "Attendance" && ["CEO", "ADMIN", "HR"].includes(role) && (
+        {page === "Attendance" && hasPermission(permissions, "attendance.manage") && (
           <ActivityLogs />
         )}
       </>

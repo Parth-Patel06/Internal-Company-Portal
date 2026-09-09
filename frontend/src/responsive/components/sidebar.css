@@ -1,0 +1,91 @@
+/* Sidebar responsive behavior. Desktop visual styling remains in styles.css. */
+
+@media (max-width: 900px) {
+  .app > aside,
+  .app.sidebarCollapsed > aside {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    width: min(280px, 86vw) !important;
+    max-width: 86vw !important;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    flex: 0 0 min(280px, 86vw) !important;
+    z-index: 2002 !important;
+    transform: translate3d(-105%, 0, 0) !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    box-shadow: 18px 0 45px rgba(0,0,0,.18) !important;
+    transition: transform .25s ease, visibility .25s ease !important;
+  }
+
+  .app.mobileSidebarOpen > aside {
+    transform: translate3d(0, 0, 0) !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+  }
+
+  .app.mobileViewport aside .brand,
+  .app.mobileViewport.sidebarCollapsed aside .brand {
+    width: auto !important;
+    height: 58px !important;
+    margin: 0 10px 24px !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 11px !important;
+  }
+
+  .app.mobileViewport aside .brandImage,
+  .app.mobileViewport.sidebarCollapsed aside .brandImage {
+    width: 52px !important;
+    height: 52px !important;
+    flex: 0 0 52px !important;
+    object-fit: contain !important;
+  }
+
+  .app.mobileViewport aside .brandText,
+  .app.mobileViewport.sidebarCollapsed aside .brandText { display: flex !important; }
+
+  .app.mobileViewport aside .navGroupTrigger,
+  .app.mobileViewport.sidebarCollapsed aside .navGroupTrigger { display: flex !important; }
+
+  .app.mobileViewport aside .navSubmenuItem .navLabel,
+  .app.mobileViewport.sidebarCollapsed aside .navSubmenuItem .navLabel { display: inline !important; }
+
+  .app.mobileViewport aside .navSubmenuItem,
+  .app.mobileViewport.sidebarCollapsed aside .navSubmenuItem {
+    justify-content: flex-start !important;
+    padding-left: 38px !important;
+  }
+
+  .app.mobileViewport.sidebarCollapsed aside .navSubmenu {
+    display: block !important;
+    max-height: 0 !important;
+    opacity: 0 !important;
+  }
+
+  .app.mobileViewport.sidebarCollapsed aside .navGroup.open .navSubmenu,
+  .app.mobileViewport.sidebarCollapsed aside .navGroup.containsActive .navSubmenu {
+    max-height: 520px !important;
+    opacity: 1 !important;
+  }
+
+  .responsiveSidebarOverlay {
+    appearance: none !important;
+    display: block !important;
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100dvh !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: rgba(5,12,24,.48) !important;
+    cursor: pointer !important;
+    z-index: 2001 !important;
+    touch-action: manipulation !important;
+  }
+}

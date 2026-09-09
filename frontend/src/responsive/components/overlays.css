@@ -1,0 +1,21 @@
+/* Shared overlay/modal responsiveness. */
+@media (max-width: 700px) {
+  .globalSearchPanel,
+  .notificationPanel,
+  .portalModal {
+    width: min(calc(100vw - 24px), 680px) !important;
+    max-width: calc(100vw - 24px) !important;
+  }
+
+  .globalSearchPanel { left: 12px !important; right: 12px !important; }
+  .notificationPanel { right: 12px !important; left: auto !important; }
+  .portalModalHeader,
+  .portalModalBody,
+  .portalModalActions { min-width: 0; }
+  .portalModalActions button { flex: 1 1 120px; }
+}
+
+@media (max-width: 480px) {
+  .portalModal { max-height: calc(100svh - 16px) !important; }
+  .notificationPanel { max-height: calc(100svh - 70px); overflow-y: auto; }
+}

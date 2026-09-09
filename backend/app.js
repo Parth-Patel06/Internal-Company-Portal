@@ -20,6 +20,7 @@ process.on("uncaughtException", (error) => {
 
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
+app.use("/uploads", express.static(require("path").join(__dirname, "uploads")));
 
 
 app.get("/", (req, res) => {
@@ -72,9 +73,17 @@ io.on("connection", (socket) => {
     if (!Number.isInteger(id)) return;
 
     const rows = await pool.query(
-      `SELECT id FROM chat_conversations
-       WHERE id = $1
-         AND (user_one_id = $2 OR user_two_id = $2)`,
+      `SELECT c.id
+       FROM chat_conversations c
+       LEFT JOIN chat_members cm
+         ON cm.conversation_id = c.id
+        AND cm.user_id = $2
+       WHERE c.id = $1
+         AND (
+           (c.conversation_type = 'direct' AND (c.user_one_id = $2 OR c.user_two_id = $2))
+           OR
+           (c.conversation_type = 'group' AND cm.user_id IS NOT NULL)
+         )`,
       [id, socket.user.id]
     ).catch(() => ({ rows: [] }));
 
@@ -96,25 +105,51 @@ app.use((err, req, res, next) => {
 
 
 function closeOpenSessionsAtEndOfDay() {
-  const now = new Date();
-  if (now.getHours() !== 23 || now.getMinutes() !== 0) return;
-
-  const pool = require("./db/pool");
-  pool.query(
-    `UPDATE login_logs
-     SET logout_at = NOW()
-     WHERE logout_at IS NULL`
-  ).then(() => {
-    console.log("End-of-day logout completed.");
+  // Always evaluate the company cutoff in India Standard Time, independent
+  // of the machine/database server timezone. The query also catches up if
+  // the backend was offline at exactly 11:00 PM.
+  return pool.query(`
+    WITH clock AS (
+      SELECT CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata' AS local_now
+    )
+    UPDATE login_logs
+    SET logout_at = CURRENT_TIMESTAMP
+    WHERE logout_at IS NULL
+      AND (SELECT local_now::time FROM clock) >= TIME '23:00'
+      AND login_at < (
+        (SELECT local_now::date FROM clock) + TIME '23:00'
+      ) AT TIME ZONE 'Asia/Kolkata'
+  `).then((result) => {
+    if (result.rowCount) {
+      console.log(`End-of-day logout completed for ${result.rowCount} session(s).`);
+    }
   }).catch((error) => {
     console.error("END-OF-DAY LOGOUT ERROR:", error);
   });
 }
 
-// Check once per minute. Open sessions are closed at 23:00 server time.
+// Also close sessions left open from a previous company day. This protects
+// against restarts/deployments that happen around the 11 PM cutoff.
+function closeStaleSessions() {
+  return pool.query(`
+    UPDATE login_logs
+    SET logout_at = CURRENT_TIMESTAMP
+    WHERE logout_at IS NULL
+      AND (login_at AT TIME ZONE 'Asia/Kolkata')::date <
+          (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date
+  `).then((result) => {
+    if (result.rowCount) {
+      console.log(`Closed ${result.rowCount} stale session(s).`);
+    }
+  }).catch((error) => {
+    console.error("STALE SESSION CLEANUP ERROR:", error);
+  });
+}
+
+// Check once per minute. The database query is timezone-safe and catches up
+// automatically if the backend was unavailable at exactly 11:00 PM IST.
 setInterval(closeOpenSessionsAtEndOfDay, 60 * 1000);
-
-
+closeStaleSessions();
 
 function completeDueOffboardings() {
   const pool = require("./db/pool");
@@ -139,79 +174,75 @@ function completeDueOffboardings() {
 setInterval(completeDueOffboardings, 60 * 1000);
 completeDueOffboardings();
 
-// Monthly payroll generation:
-// On the 1st of each month, create payroll for the PREVIOUS calendar month.
-// Days 2-7 are a catch-up window if the backend was offline on the 1st.
-async function generatePreviousMonthPayroll() {
-  const pool = require("./db/pool");
-  const now = new Date();
-  if (now.getDate() > 7) return;
-
-  const previousFirst = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const previousYear = previousFirst.getFullYear();
-  const previousMonthNumber = previousFirst.getMonth() + 1;
-  const monthLabel = previousFirst.toLocaleString("en-US", { month: "long", year: "numeric" });
-  const firstDay = `${previousYear}-${String(previousMonthNumber).padStart(2, "0")}-01`;
-  const currentFirst = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-
-  // Employee payroll: HR/Admin handle review and approval.
-  await pool.query(
-    `INSERT INTO salary_records
-      (user_id, month, basic_salary, hra, allowances, overtime_pay,
-       gross_salary, deductions, net_salary, amount, status)
-     SELECT
-       u.id, $1,
-       COALESCE(u.salary_basic, 0),
-       COALESCE(u.salary_hra, 0),
-       COALESCE(u.salary_allowances, 0),
-       0,
-       COALESCE(u.salary_basic,0) + COALESCE(u.salary_hra,0) + COALESCE(u.salary_allowances,0),
-       COALESCE(u.salary_deductions,0),
-       COALESCE(u.salary_basic,0) + COALESCE(u.salary_hra,0) + COALESCE(u.salary_allowances,0) - COALESCE(u.salary_deductions,0),
-       COALESCE(u.salary_basic,0) + COALESCE(u.salary_hra,0) + COALESCE(u.salary_allowances,0) - COALESCE(u.salary_deductions,0),
-       'Pending Review'
-     FROM users u
-     WHERE LOWER(u.role) = 'employee'
-       AND COALESCE(u.permanent, true) = true
-       AND (u.joining_date IS NULL OR u.joining_date < $2::date)
-       AND (u.end_date IS NULL OR u.end_date >= $3::date)
-     ON CONFLICT (user_id, month) DO NOTHING`,
-    [monthLabel, currentFirst, firstDay]
-  );
-
-  // HR/Admin payroll: CEO is the final approver.
-  await pool.query(
-    `INSERT INTO salary_records
-      (user_id, month, basic_salary, hra, allowances, overtime_pay,
-       gross_salary, deductions, net_salary, amount, status)
-     SELECT
-       u.id, $1,
-       COALESCE(u.salary_basic, 0),
-       COALESCE(u.salary_hra, 0),
-       COALESCE(u.salary_allowances, 0),
-       0,
-       COALESCE(u.salary_basic,0) + COALESCE(u.salary_hra,0) + COALESCE(u.salary_allowances,0),
-       COALESCE(u.salary_deductions,0),
-       COALESCE(u.salary_basic,0) + COALESCE(u.salary_hra,0) + COALESCE(u.salary_allowances,0) - COALESCE(u.salary_deductions,0),
-       COALESCE(u.salary_basic,0) + COALESCE(u.salary_hra,0) + COALESCE(u.salary_allowances,0) - COALESCE(u.salary_deductions,0),
-       'Pending Review'
-     FROM users u
-     WHERE LOWER(u.role) IN ('admin','hr')
-       AND (u.joining_date IS NULL OR u.joining_date < $2::date)
-       AND (u.end_date IS NULL OR u.end_date >= $3::date)
-     ON CONFLICT (user_id, month) DO NOTHING`,
-    [monthLabel, currentFirst, firstDay]
-  );
-
-  console.log(`Previous-month payroll generation checked for ${monthLabel}.`);
-}
-
+// Salary and Overtime payroll generation is intentionally disabled.
+// // Monthly payroll generation:
+// // On the 1st of each month, create payroll for the PREVIOUS calendar month.
+// // Days 2-7 are a catch-up window if the backend was offline on the 1st.
+// async function generatePreviousMonthPayroll() {
+//   const pool = require("./db/pool");
+//   const now = new Date();
+//   if (now.getDate() > 7) return;
+//
+//   const previousFirst = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+//   const previousYear = previousFirst.getFullYear();
+//   const previousMonthNumber = previousFirst.getMonth() + 1;
+//   const monthLabel = previousFirst.toLocaleString("en-US", { month: "long", year: "numeric" });
+//   const firstDay = `${previousYear}-${String(previousMonthNumber).padStart(2, "0")}-01`;
+//   const currentFirst = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+//
+//   // Employee payroll: HR/Admin handle review and approval.
+//   await pool.query(
+//     `INSERT INTO salary_records
+//       (user_id, month, basic_salary, hra, allowances, overtime_pay,
+//        gross_salary, deductions, net_salary, amount, status)
+//      SELECT
+//        u.id, $1,
+//        COALESCE(u.salary_basic, 0),
+//        COALESCE(u.salary_hra, 0),
+//        COALESCE(u.salary_allowances, 0),
+//        0,
+//        COALESCE(u.salary_basic,0) + COALESCE(u.salary_hra,0) + COALESCE(u.salary_allowances,0),
+//        COALESCE(u.salary_deductions,0),
+//        COALESCE(u.salary_basic,0) + COALESCE(u.salary_hra,0) + COALESCE(u.salary_allowances,0) - COALESCE(u.salary_deductions,0),
+//        COALESCE(u.salary_basic,0) + COALESCE(u.salary_hra,0) + COALESCE(u.salary_allowances,0) - COALESCE(u.salary_deductions,0),
+//        'Pending Review'
+//      FROM users u
+//      WHERE LOWER(u.role) = 'employee'
+//        AND COALESCE(u.permanent, true) = true
+//        AND (u.joining_date IS NULL OR u.joining_date < $2::date)
+//        AND (u.end_date IS NULL OR u.end_date >= $3::date)
+//      ON CONFLICT (user_id, month) DO NOTHING`,
+//     [monthLabel, currentFirst, firstDay]
+//   );
+//
+//   // HR/Admin payroll: CEO is the final approver.
+//   await pool.query(
+//     `INSERT INTO salary_records
+//       (user_id, month, basic_salary, hra, allowances, overtime_pay,
+//        gross_salary, deductions, net_salary, amount, status)
+//      SELECT
+//        u.id, $1,
+//        COALESCE(u.salary_basic, 0),
+//        COALESCE(u.salary_hra, 0),
+//        COALESCE(u.salary_allowances, 0),
+//        0,
+//        COALESCE(u.salary_basic,0) + COALESCE(u.salary_hra,0) + COALESCE(u.salary_allowances,0),
+//        COALESCE(u.salary_deductions,0),
+//        COALESCE(u.salary_basic,0) + COALESCE(u.salary_hra,0) + COALESCE(u.salary_allowances,0) - COALESCE(u.salary_deductions,0),
+//        COALESCE(u.salary_basic,0) + COALESCE(u.salary_hra,0) + COALESCE(u.salary_allowances,0) - COALESCE(u.salary_deductions,0),
+//        'Pending Review'
+//      FROM users u
+//      WHERE LOWER(u.role) IN ('admin','hr')
+//        AND (u.joining_date IS NULL OR u.joining_date < $2::date)
+//        AND (u.end_date IS NULL OR u.end_date >= $3::date)
+//      ON CONFLICT (user_id, month) DO NOTHING`,
+//     [monthLabel, currentFirst, firstDay]
+//   );
+//
+//   console.log(`Previous-month payroll generation checked for ${monthLabel}.`);
+// }
 const PORT = process.env.PORT || 8000;
+
 server.listen(PORT, () => {
   console.log(`TrioByte backend running on http://localhost:${PORT}`);
-  generatePreviousMonthPayroll().catch((error) => console.error("MONTHLY PAYROLL ERROR:", error));
 });
-
-setInterval(() => {
-  generatePreviousMonthPayroll().catch((error) => console.error("MONTHLY PAYROLL ERROR:", error));
-}, 60 * 60 * 1000);

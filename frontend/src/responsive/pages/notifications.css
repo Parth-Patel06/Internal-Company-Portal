@@ -1,0 +1,4 @@
+@media (max-width: 700px) {
+  .notificationPanel { width: calc(100vw - 24px) !important; max-width: calc(100vw - 24px) !important; right: 12px !important; max-height: calc(100svh - 70px); overflow-y: auto; }
+  .notificationHead { gap: 8px; }
+}

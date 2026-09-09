@@ -1,0 +1,242 @@
+/* Global portal navigation control. It is intentionally outside <main> so
+   special full-screen pages such as Chat cannot hide it. */
+.responsiveHamburger {
+  appearance: none;
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  position: fixed !important;
+  left: 12px;
+  top: 17px;
+  z-index: 2005;
+  box-shadow: 0 6px 18px rgba(0,0,0,.12);
+}
+
+.responsiveHamburger:hover { background: var(--nav-hover); }
+.responsiveHamburger:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+@media (min-width: 901px) {
+  .responsiveHamburger { position: fixed !important; left: 276px; top: 17px; }
+  .app.sidebarCollapsed .responsiveHamburger { left: 88px; }
+}
+
+@media (max-width: 900px) {
+  .responsiveHamburger {
+    left: 10px;
+    top: 10px;
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+  }
+}
+
+@media (max-width: 560px) {
+  .responsiveHamburger {
+    left: 8px;
+    top: 9px;
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    border-radius: 9px;
+  }
+}
+
+/* Keep the normal portal header readable on regular pages. The control is
+   independent, so it remains available even when a page uses full-screen UI. */
+@media (max-width: 900px) {
+  .app.mobileViewport > main > header {
+    padding-left: 58px !important;
+    z-index: 1500 !important;
+  }
+}
+
+@media (max-width: 560px) {
+  .app.mobileViewport > main > header { padding-left: 54px !important; }
+}
+
+
+/* Center the portal breadcrumb independently from the hamburger and
+   right-side header actions. */
+.app > main > header {
+  position: fixed !important;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+}
+
+.app > main > header > .headerActions {
+  position: absolute;
+  right: 38px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px !important;
+  z-index: 20;
+}
+
+.app > main > header > .pageBreadcrumb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-width: 0;
+  max-width: calc(100% - 120px);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.app > main > header > .pageBreadcrumb .workspaceLabel {
+  display: inline;
+  flex: 0 0 auto;
+}
+
+.app > main > header > .pageBreadcrumb strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .app > main > header > .headerActions {
+    right: 10px;
+  }
+}
+
+@media (max-width: 620px) {
+  .app > main > header {
+    padding-left: 50px !important;
+    padding-right: 4px !important;
+    overflow: hidden;
+  }
+
+  .app > main > header > .headerActions {
+    right: 4px;
+    top: 50%;
+    gap: 2px !important;
+    max-width: 136px;
+    flex-shrink: 0;
+  }
+
+  .app > main > header > .pageBreadcrumb {
+    left: 50px;
+    right: 142px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: auto;
+    max-width: none;
+    justify-content: center;
+    gap: 4px;
+    font-size: 10px;
+    line-height: 1;
+  }
+
+  .app > main > header > .pageBreadcrumb .workspaceLabel {
+    display: inline;
+    flex: 0 0 auto;
+    font-size: 8px;
+    letter-spacing: .07em;
+  }
+
+  .app > main > header > .pageBreadcrumb strong {
+    min-width: 0;
+    max-width: 70px;
+    font-size: 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .app > main > header > .headerActions .themeQuickSwitch {
+    display: flex !important;
+    padding: 1px;
+    gap: 0;
+    border-radius: 7px;
+  }
+
+  .app > main > header > .headerActions .themeQuickSwitch button {
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+  }
+
+  .app > main > header > .headerActions .headerIconButton {
+    width: 27px;
+    height: 27px;
+    min-width: 27px;
+    padding: 0;
+  }
+
+  .app > main > header > .headerActions .topAvatar {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+  }
+}
+
+@media (max-width: 360px) {
+  .app > main > header {
+    padding-left: 48px !important;
+  }
+
+  .app > main > header > .headerActions {
+    right: 3px;
+    max-width: 132px;
+    gap: 1px !important;
+  }
+
+  .app > main > header > .pageBreadcrumb {
+    left: 48px;
+    right: 137px;
+    gap: 3px;
+  }
+
+  .app > main > header > .pageBreadcrumb .workspaceLabel {
+    font-size: 7px;
+    letter-spacing: .04em;
+  }
+
+  .app > main > header > .pageBreadcrumb strong {
+    max-width: 64px;
+    font-size: 9px;
+  }
+
+  .app > main > header > .headerActions .themeQuickSwitch button {
+    width: 19px;
+    height: 19px;
+  }
+
+  .app > main > header > .headerActions .headerIconButton {
+    width: 25px;
+    height: 25px;
+    min-width: 25px;
+  }
+
+  .app > main > header > .headerActions .topAvatar {
+    width: 27px;
+    height: 27px;
+    min-width: 27px;
+  }
+}
+
+/* Keep page content below the fixed global header. */
+.app > main {
+  padding-top: 70px;
+}

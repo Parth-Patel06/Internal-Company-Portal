@@ -1,10 +1,9 @@
-import React, { useEffect, useRef, useState } from "react";
-import * as I from "lucide-react";
-import { api, getToken, setToken, clearToken } from "../api";
-import { normalizeRole, all } from "../utils/navigation";
+import { useEffect, useState } from "react";
+import { api } from "../api";
+import { normalizeRole, all, hasAnyPermission } from "../utils/navigation";
 
-function ProjectEditModal({ project, me, onClose, onSaved }) {
-  const role=normalizeRole(me.role), management=["CEO","ADMIN","HR"].includes(role);
+function ProjectEditModal({ project, me, permissions, onClose, onSaved }) {
+  const role=normalizeRole(me.role), management=hasAnyPermission(permissions,["projects.edit","projects.manage_members"]);
   const [users,setUsers]=useState([]), [members,setMembers]=useState([]), [saving,setSaving]=useState(false), [loading,setLoading]=useState(true), [error,setError]=useState("");
   const [form,setForm]=useState({name:project.name||"",description:project.description||"",lead_id:project.lead_id?String(project.lead_id):"",member_ids:[],start_date:project.start_date?String(project.start_date).slice(0,10):"",deadline:project.deadline?String(project.deadline).slice(0,10):"",status:project.status||"Planning",priority:project.priority||"Medium"});
 

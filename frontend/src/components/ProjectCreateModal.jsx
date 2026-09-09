@@ -1,7 +1,5 @@
-import React, { useEffect, useRef, useState } from "react";
-import * as I from "lucide-react";
-import { api, getToken, setToken, clearToken } from "../api";
-import { normalizeRole, all } from "../utils/navigation";
+import { useEffect, useState } from "react";
+import { api } from "../api";
 
 function ProjectCreateModal({ onClose, onCreated }) {
   const [users, setUsers] = useState([]);

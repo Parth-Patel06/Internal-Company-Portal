@@ -88,9 +88,21 @@ router.post("/login", async (req, res) => {
       return res.status(403).json({ message: "Company email is deactivated" });
     }
 
-    await pool
-      .query("INSERT INTO login_logs(user_id) VALUES($1)", [user.id])
-      .catch(() => {});
+    // Only one open portal session is allowed per employee. If an older
+    // session was left open (browser closed, device changed, etc.), close it
+    // before creating the new session.
+    await pool.query(
+      `UPDATE login_logs
+       SET logout_at = CURRENT_TIMESTAMP
+       WHERE user_id = $1 AND logout_at IS NULL`,
+      [user.id]
+    );
+
+    await pool.query(
+      `INSERT INTO login_logs(user_id, login_at)
+       VALUES($1, CURRENT_TIMESTAMP)`,
+      [user.id]
+    );
 
     const token = jwt.sign(
       { id: user.id },

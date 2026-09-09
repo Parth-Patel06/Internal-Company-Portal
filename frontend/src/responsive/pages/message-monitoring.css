@@ -1,0 +1,12 @@
+@media (max-width: 900px) {
+  .monitoringStats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .monitoringFilters { min-width: 0; }
+  .monitoringTableWrap { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
+@media (max-width: 700px) {
+  .monitoringStats { grid-template-columns: 1fr; }
+  .monitoringFilters { grid-template-columns: 1fr; grid-template-areas: "search" "employee" "from" "to" "apply" "toggle"; }
+  .monitoringApplyButton, .monitoringToggle { width: 100%; }
+  .monitoringPagination { flex-wrap: wrap; }
+  .messageMonitoringIntro { align-items: stretch; flex-direction: column; }
+}

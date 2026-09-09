@@ -1,0 +1,17 @@
+/* Profile photos used only by Chat. */
+.chatAvatarImage {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.chatMessageAvatarImage {
+  width: 28px;
+  height: 28px;
+  display: block;
+  object-fit: cover;
+  border-radius: 50%;
+  margin-bottom: 6px;
+}

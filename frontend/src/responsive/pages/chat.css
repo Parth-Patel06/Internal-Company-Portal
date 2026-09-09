@@ -1,0 +1,432 @@
+/* Chat responsive layer.
+   The base Chat styling remains in styles.css. These rules use the same
+   scoped specificity as the fixed Chat shell so the responsive behavior
+   cannot be silently overridden by the base layout rules. */
+
+.chatMobileBack { display: none; }
+
+@media (max-width: 1200px) {
+  .app:has(.chatShell) .chatShell {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .app:has(.chatShell) .chatMessages,
+  .app:has(.chatShell) .chatBody {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Tablet + phone: Chat becomes a two-screen messenger.
+   Show the conversation list OR the active conversation, never both squeezed
+   into a narrow viewport. */
+@media (max-width: 900px) {
+  .app:has(.chatShell.chatMobile) .content {
+    width: 100%;
+    height: calc(100svh - 72px);
+    min-height: 0;
+    padding: 10px 12px 12px;
+    overflow: hidden;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatShell {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+    display: grid;
+    grid-template-columns: 1fr !important;
+    overflow: hidden;
+    border-radius: 14px;
+  }
+
+  /* List screen */
+  .app:has(.chatShell.chatMobile.chatListView) .chatSidebar {
+    display: flex !important;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+    border-right: 0;
+    border-bottom: 0;
+  }
+
+  .app:has(.chatShell.chatMobile.chatListView) .chatMain {
+    display: none !important;
+  }
+
+  /* Conversation screen */
+  .app:has(.chatShell.chatMobile.chatConversationView) .chatSidebar {
+    display: none !important;
+  }
+
+  .app:has(.chatShell.chatMobile.chatConversationView) .chatMain {
+    display: flex !important;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatSidebarHead {
+    padding: 15px 14px 10px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatSidebarHead h2 {
+    font-size: 20px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatSearch {
+    margin: 0 12px 10px;
+    padding: 10px 11px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatSearch input {
+    font-size: 14px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatConversationList {
+    flex: 1 1 auto;
+    min-height: 120px;
+    max-height: none;
+    overflow-y: auto;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatUserList {
+    flex: 0 1 42%;
+    min-height: 100px;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatConversation,
+  .app:has(.chatShell.chatMobile) .chatUserRow {
+    min-height: 60px;
+    padding: 9px 10px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatConversationText strong,
+  .app:has(.chatShell.chatMobile) .chatUserRow strong {
+    font-size: 13px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatConversationText small,
+  .app:has(.chatShell.chatMobile) .chatUserRow small {
+    font-size: 11px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatHeader {
+    flex: 0 0 58px;
+    height: 58px;
+    min-height: 58px;
+    padding: 8px 10px;
+    gap: 9px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatMobileBack {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--card);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatHeaderIdentity {
+    min-width: 0;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatHeaderIdentity h3,
+  .app:has(.chatShell.chatMobile) .chatHeaderIdentity small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatGroupInfoButton {
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatMessages {
+    padding: 12px 10px;
+    min-width: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatMessageRow {
+    width: 100%;
+    max-width: 100%;
+    margin: 5px 0;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatBubble {
+    max-width: 88%;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatAttachment,
+  .app:has(.chatShell.chatMobile) .chatVoiceMessage {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatVoiceMessage audio {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatComposer {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 9px 10px 10px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatComposerTools {
+    width: 100%;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px 44px;
+    gap: 7px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatComposerTools select,
+  .app:has(.chatShell.chatMobile) .chatComposerIconButton {
+    width: 100%;
+    height: 42px;
+    min-width: 0;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatComposer > input,
+  .app:has(.chatShell.chatMobile) .chatComposer > textarea {
+    width: 100%;
+    min-width: 0;
+    min-height: 46px;
+    max-height: 120px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatComposer > .primary {
+    width: 100%;
+    min-height: 46px;
+    margin: 0;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatError {
+    margin: 6px 10px 0;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatNoSelection {
+    padding: 24px;
+  }
+}
+
+@media (max-width: 560px) {
+  .app:has(.chatShell.chatMobile) .content {
+    padding: 6px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatShell {
+    border-radius: 10px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatSidebarHead {
+    padding: 12px 10px 8px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatSearch {
+    margin-left: 8px;
+    margin-right: 8px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatSectionLabel {
+    padding-left: 11px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatConversationList,
+  .app:has(.chatShell.chatMobile) .chatUserList {
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatBubble {
+    max-width: 92%;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatMessageMeta {
+    flex-wrap: wrap;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatGroupModal,
+  .app:has(.chatShell.chatMobile) .chatDeleteModal {
+    width: calc(100vw - 20px);
+    max-width: calc(100vw - 20px);
+    max-height: calc(100svh - 20px);
+    padding: 14px;
+  }
+}
+
+@media (max-width: 380px) {
+  .app:has(.chatShell.chatMobile) .chatComposerTools {
+    grid-template-columns: minmax(0, 1fr) 40px 40px;
+    gap: 5px;
+  }
+
+  .app:has(.chatShell.chatMobile) .chatConversationMeta {
+    display: none;
+  }
+}
+
+
+/* =========================================================
+   CHAT MOBILE/TABLET — WHATSAPP-STYLE SINGLE SCREEN
+   Desktop and laptop keep the existing two-panel layout.
+   ========================================================= */
+@media (max-width: 900px) {
+  .app:has(.chatShell) > main {
+    height: 100dvh !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  .app:has(.chatShell) .content {
+    height: calc(100dvh - 58px) !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+
+  .app:has(.chatShell) .chatShell {
+    height: 100% !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    width: 100% !important;
+    grid-template-columns: 1fr !important;
+    border-radius: 0 !important;
+    border-left: 0 !important;
+    border-right: 0 !important;
+    border-bottom: 0 !important;
+  }
+
+  .app:has(.chatShell.chatListView) .chatSidebar {
+    display: flex !important;
+    width: 100% !important;
+    height: 100% !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    border: 0 !important;
+  }
+
+  .app:has(.chatShell.chatListView) .chatMain { display: none !important; }
+
+  .app:has(.chatShell.chatConversationView) .chatSidebar { display: none !important; }
+
+  .app:has(.chatShell.chatConversationView) .chatMain {
+    display: flex !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 0 !important;
+  }
+
+  .app:has(.chatShell) .chatSidebarHead { padding: 14px 14px 9px !important; }
+  .app:has(.chatShell) .chatSearch { margin: 0 12px 8px !important; padding: 9px 10px !important; }
+
+  .app:has(.chatShell) .chatConversationList {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow-y: auto !important;
+  }
+
+  .app:has(.chatShell) .chatUserList {
+    flex: 0 1 34% !important;
+    min-height: 90px !important;
+    max-height: 240px !important;
+    overflow-y: auto !important;
+  }
+
+  .app:has(.chatShell) .chatMain > .chatHeader {
+    height: 58px !important;
+    min-height: 58px !important;
+    flex: 0 0 58px !important;
+    padding: 8px 10px !important;
+  }
+
+  .app:has(.chatShell) .chatMobileBack {
+    display: grid !important;
+    width: 38px !important;
+    height: 38px !important;
+    min-width: 38px !important;
+    flex: 0 0 38px !important;
+  }
+
+  .app:has(.chatShell) .chatMessages {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    height: auto !important;
+    padding: 12px 10px !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  .app:has(.chatShell) .chatComposer {
+    flex: 0 0 auto !important;
+    min-height: 0 !important;
+    padding: 8px 9px calc(8px + env(safe-area-inset-bottom)) !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    gap: 7px !important;
+    align-items: end !important;
+  }
+
+  .app:has(.chatShell) .chatComposerTools {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 42px 42px !important;
+    gap: 6px !important;
+  }
+
+  .app:has(.chatShell) .chatComposer > input,
+  .app:has(.chatShell) .chatComposer > textarea {
+    min-width: 0 !important;
+    width: 100% !important;
+    min-height: 44px !important;
+    max-height: 120px !important;
+  }
+
+  .app:has(.chatShell) .chatComposer > .primary {
+    width: auto !important;
+    min-width: 74px !important;
+    min-height: 44px !important;
+    margin: 0 !important;
+  }
+
+  .app:has(.chatShell) .chatBubble {
+    max-width: 88% !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  .app:has(.chatShell) .chatAttachment,
+  .app:has(.chatShell) .chatVoiceMessage { max-width: 100% !important; min-width: 0 !important; }
+}
+
+@media (max-width: 560px) {
+  .app:has(.chatShell) .chatSidebarHead { padding: 12px 11px 7px !important; }
+  .app:has(.chatShell) .chatSearch { margin: 0 9px 7px !important; }
+  .app:has(.chatShell) .chatSectionLabel { padding-left: 12px !important; }
+  .app:has(.chatShell) .chatConversation,
+  .app:has(.chatShell) .chatUserRow { min-height: 58px !important; padding: 8px 9px !important; }
+  .app:has(.chatShell) .chatComposer > .primary { min-width: 68px !important; padding-left: 10px !important; padding-right: 10px !important; }
+}
+
+@media (max-width: 380px) {
+  .app:has(.chatShell) .chatComposerTools { grid-template-columns: minmax(0, 1fr) 38px 38px !important; gap: 5px !important; }
+  .app:has(.chatShell) .chatComposer > .primary { min-width: 62px !important; font-size: 11px !important; }
+}

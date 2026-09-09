@@ -1,0 +1,7 @@
+@media (max-width: 900px) {
+  .companyCalendarWrap, .companyCalendar { min-width: 0; max-width: 100%; }
+  .calendarControls { flex-wrap: wrap; }
+  .calendarHeader, .calendarDetailsHead { flex-wrap: wrap; }
+  .companyCalendar { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .companyCalendarGrid { min-width: 760px; }
+}

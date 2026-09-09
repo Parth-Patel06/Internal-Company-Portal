@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import * as I from "lucide-react";
-import { api, getToken, setToken, clearToken } from "../api";
-import { normalizeRole, all } from "../utils/navigation";
+import { api } from "../api";
+import { normalizeRole } from "../utils/navigation";
 
 function CompanyCalendar({ me }) {
   const [viewDate, setViewDate] = useState(() => new Date());

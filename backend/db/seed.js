@@ -1,6 +1,33 @@
 const pool = require("./pool");
 const bcrypt = require("bcryptjs");
 
+
+const { PERMISSIONS, roleDefault } = require('./permission-definitions');
+
+async function seedPermissions(client) {
+  for (const [key, name, module, description, sensitive] of PERMISSIONS) {
+    await client.query(`
+      INSERT INTO permissions(permission_key, permission_name, module, description, is_sensitive)
+      VALUES($1,$2,$3,$4,$5)
+      ON CONFLICT(permission_key) DO UPDATE SET
+        permission_name=EXCLUDED.permission_name,
+        module=EXCLUDED.module,
+        description=EXCLUDED.description,
+        is_sensitive=EXCLUDED.is_sensitive
+    `, [key, name, module, description, sensitive]);
+  }
+  for (const role of ['CEO','ADMIN','HR','EMPLOYEE','INTERN']) {
+    for (const [key] of PERMISSIONS) {
+      const permission = (await client.query('SELECT id FROM permissions WHERE permission_key=$1', [key])).rows[0];
+      await client.query(`
+        INSERT INTO role_permissions(role, permission_id, access)
+        VALUES($1,$2,$3)
+        ON CONFLICT(role, permission_id) DO UPDATE SET access=EXCLUDED.access, updated_at=NOW()
+      `, [role, permission.id, roleDefault(role, key)]);
+    }
+  }
+}
+
 async function seed() {
   const client = await pool.connect();
 
@@ -8,6 +35,8 @@ async function seed() {
     console.log("Cleaning old demo data...");
 
     await client.query("BEGIN");
+
+    await seedPermissions(client);
 
     /*
       Delete child tables first because of foreign key constraints.

@@ -1,4 +1,8 @@
-const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+export const API_BASE = import.meta.env.VITE_API_URL || (
+  typeof window !== "undefined"
+    ? `${window.location.protocol}//${window.location.hostname}:8000`
+    : "http://localhost:8000"
+);
 
 export const getToken = () =>
   localStorage.getItem("tb_token");
@@ -11,22 +15,28 @@ export const clearToken = () =>
 
 export async function api(path, options = {}) {
   const token = getToken();
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
 
   let response;
 
   try {
-    response = await fetch(`${BASE}${path}`, {
+    const headers = {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    };
+
+    // Let the browser set the multipart boundary for FormData.
+    if (!isFormData) {
+      headers["Content-Type"] = headers["Content-Type"] || "application/json";
+    }
+
+    response = await fetch(`${API_BASE}${path}`, {
       ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...(token
-          ? { Authorization: `Bearer ${token}` }
-          : {}),
-        ...(options.headers || {}),
-      },
+      headers,
       body:
         options.body &&
-        typeof options.body !== "string"
+        typeof options.body !== "string" &&
+        !isFormData
           ? JSON.stringify(options.body)
           : options.body,
     });

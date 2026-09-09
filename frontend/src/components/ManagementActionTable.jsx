@@ -1,9 +1,7 @@
-import React, { useEffect, useRef, useState } from "react";
-import * as I from "lucide-react";
-import { api, getToken, setToken, clearToken } from "../api";
-import { normalizeRole, all } from "../utils/navigation";
+import { api } from "../api";
+import { hasPermission } from "../utils/navigation";
 
-function ManagementActionTable({ rows, fields, type, canManage, onStatusChange, role }) {
+function ManagementActionTable({ rows, fields, type, canManage, onStatusChange, role, permissions }) {
   if (!rows || !rows.length) return <div className="card empty">No data available.</div>;
 
   if (type === "salary") {
@@ -13,8 +11,8 @@ function ManagementActionTable({ rows, fields, type, canManage, onStatusChange, 
           const targetRole = String(row.employee_role || "").toUpperCase();
           const managementSalary = ["ADMIN", "HR"].includes(targetRole);
           const status = String(row.status || "Pending Review");
-          const canReview = canManage && !managementSalary && ["Pending Review", "Reviewed"].includes(status) && ["CEO", "ADMIN", "HR"].includes(String(role || "").toUpperCase());
-          const canApprove = canManage && ["Pending Review", "Reviewed"].includes(status) && (managementSalary ? String(role || "").toUpperCase() === "CEO" : ["CEO", "ADMIN", "HR"].includes(String(role || "").toUpperCase()));
+          const canReview = canManage && hasPermission(permissions, "salary.review") && !managementSalary && ["Pending Review", "Reviewed"].includes(status) && ["CEO", "ADMIN", "HR"].includes(String(role || "").toUpperCase());
+          const canApprove = canManage && (hasPermission(permissions, "salary.approve") || hasPermission(permissions, "salary.process")) && ["Pending Review", "Reviewed"].includes(status) && (managementSalary ? String(role || "").toUpperCase() === "CEO" : ["CEO", "ADMIN", "HR"].includes(String(role || "").toUpperCase()));
           const canSendBack = canApprove || canReview;
           return (
             <div className="card salaryCard" key={row.id || index}>

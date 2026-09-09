@@ -1,0 +1,19 @@
+# Backend dependencies
+node_modules/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# User-generated uploads
+uploads/
+
+# Runtime logs
+*.log
+logs/
+
+# Local/generated files
+coverage/
+tmp/
+temp/

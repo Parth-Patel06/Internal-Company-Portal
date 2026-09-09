@@ -1,7 +1,5 @@
-import React, { useEffect, useRef, useState } from "react";
-import * as I from "lucide-react";
-import { api, getToken, setToken, clearToken } from "../api";
-import { normalizeRole, all } from "../utils/navigation";
+import { useEffect, useState } from "react";
+import { api, clearToken } from "../api";
 import triobyteLogo from "../Triobyte.jpeg";
 
 function ForcePasswordChange({

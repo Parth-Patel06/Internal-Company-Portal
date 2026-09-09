@@ -1,8 +1,9 @@
 const router = require("express").Router();
 const pool = require("../db/pool");
 const { auth } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/permissions");
 
-router.get("/events", auth, async (req, res) => {
+router.get("/events", auth, requirePermission("calendar.view"), async (req, res) => {
   try {
     const year = Number(req.query.year) || new Date().getFullYear();
     const month = Math.min(

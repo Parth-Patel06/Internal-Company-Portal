@@ -1,11 +1,10 @@
-import React, { useEffect, useRef, useState } from "react";
-import * as I from "lucide-react";
-import { api, getToken, setToken, clearToken } from "../api";
-import { normalizeRole, all } from "../utils/navigation";
+import { useEffect, useState } from "react";
+import { api } from "../api";
+import { normalizeRole, hasPermission, hasAnyPermission } from "../utils/navigation";
 
-function DashboardTasks({ dashboard, me, onRefresh }) {
+function DashboardTasks({ dashboard, me, onRefresh, permissions }) {
   const role = normalizeRole(me.role);
-  const management = ["CEO", "ADMIN", "HR"].includes(role);
+  const management = hasAnyPermission(permissions, ["tasks.view_all", "tasks.assign", "tasks.create"]);
   const [projects, setProjects] = useState([]);
   const [members, setMembers] = useState([]);
   const [selectedProject, setSelectedProject] = useState("");
@@ -34,7 +33,7 @@ function DashboardTasks({ dashboard, me, onRefresh }) {
   const leadProjectIds = new Set(
     projects.filter((p) => Number(p.lead_id) === Number(me.id)).map((p) => Number(p.id))
   );
-  const canCreate = management || leadProjectIds.size > 0;
+  const canCreate = hasAnyPermission(permissions, ["tasks.create", "tasks.assign"]);
 
   async function chooseProject(id) {
     setSelectedProject(id);
@@ -75,7 +74,7 @@ function DashboardTasks({ dashboard, me, onRefresh }) {
       setSelectedProject("");
       setMembers([]);
       setShowForm(false);
-      onRefresh();
+      
     } catch (err) {
       setMessage({ type: "error", text: err.message || "Unable to create task." });
     } finally {
@@ -89,7 +88,7 @@ function DashboardTasks({ dashboard, me, onRefresh }) {
         method: "PUT",
         body: { progress: Number(progress) }
       });
-      onRefresh();
+      
     } catch (err) {
       setMessage({ type: "error", text: err.message || "Unable to update progress." });
     }
@@ -120,7 +119,7 @@ function DashboardTasks({ dashboard, me, onRefresh }) {
             <label className="modalField"><span>Project *</span>
               <select value={selectedProject} onChange={(e) => chooseProject(e.target.value)}>
                 <option value="">Select project</option>
-                {projects.filter((p) => management || Number(p.lead_id) === Number(me.id)).map((p) => (
+                {projects.filter((p) => hasPermission(permissions, "tasks.create") || hasPermission(permissions, "tasks.assign")).map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
@@ -178,9 +177,9 @@ function DashboardTasks({ dashboard, me, onRefresh }) {
               </div>
               <div className="taskProgressLabel"><span>{isAssigned ? "My Progress" : "Overall Progress"}</span><b>{progress}%</b></div>
               <div className="taskProgressTrack"><div className="taskProgressFill" style={{ width: `${progress}%` }} /></div>
-              {isAssigned && (
+              {isAssigned && hasPermission(permissions, "tasks.update_progress") && (
                 <div className="taskProgressControl">
-                  <input type="range" min="0" max="100" step="5" value={progress} onChange={(e) => updateProgress(task, e.target.value)} />
+                  
                   <select value={progress} onChange={(e) => updateProgress(task, e.target.value)}>
                     {[0,10,20,30,40,50,60,70,80,90,100].map((v) => <option key={v} value={v}>{v}%</option>)}
                   </select>

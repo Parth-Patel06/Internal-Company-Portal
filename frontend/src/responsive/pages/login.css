@@ -1,0 +1,101 @@
+/* Login page: preserve the desktop composition, then intentionally stack it. */
+
+@media (max-width: 1100px) and (min-width: 901px) {
+  .login { padding: 24px; }
+  .loginShell { width: min(980px, 100%); min-height: 590px; }
+  .loginIntro { padding: 48px; }
+  .loginIntro h1 { font-size: 46px; }
+  .loginCard { padding: 52px; min-height: 590px; }
+}
+
+@media (max-width: 900px) {
+  .login {
+    min-height: 100svh;
+    width: 100%;
+    padding: 24px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    place-items: center;
+  }
+
+  .loginShell {
+    width: min(680px, 100%);
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr !important;
+    overflow: hidden;
+    border-radius: 26px;
+  }
+
+  .loginIntro {
+    min-height: 230px;
+    padding: 34px 36px;
+    justify-content: center;
+  }
+
+  .loginIntro h1 {
+    font-size: clamp(34px, 6vw, 44px);
+  }
+
+  .loginIntro p,
+  .loginFeatureList { display: none; }
+
+  .loginCard {
+    min-height: 0;
+    padding: 44px;
+  }
+}
+
+@media (max-width: 620px) {
+  .login {
+    padding: 14px;
+    place-items: start center;
+  }
+
+  .loginShell {
+    width: 100%;
+    max-width: 480px;
+    min-height: 0;
+    border-radius: 22px;
+    display: block;
+  }
+
+  /* On a phone the marketing panel is removed rather than squeezed. */
+  .loginIntro { display: none; }
+
+  .loginCard {
+    width: 100%;
+    min-height: 0;
+    padding: 30px 22px 28px;
+    border-radius: 22px;
+    justify-content: flex-start;
+  }
+
+  .loginLogo {
+    display: block;
+    width: min(175px, 55vw);
+    height: auto;
+    max-height: 62px;
+    margin: 0 auto 18px;
+    object-fit: contain;
+    object-position: center;
+  }
+
+  .loginCard h1 {
+    margin: 4px 0 8px;
+    font-size: clamp(27px, 8vw, 34px);
+  }
+
+  .loginCard p { margin-bottom: 20px; }
+  .loginCard input,
+  .loginCard form button { width: 100%; min-height: 48px; }
+  .loginCard input { padding: 13px 14px; }
+  .loginCard form button { margin-top: 10px; }
+  .link { min-height: 44px; }
+}
+
+@media (max-width: 380px) {
+  .login { padding: 10px; }
+  .loginCard { padding: 26px 18px 24px; }
+  .loginLogo { width: min(155px, 58vw); }
+}

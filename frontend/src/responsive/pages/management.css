@@ -1,0 +1,11 @@
+@media (max-width: 900px) {
+  .moduleTop { gap: 12px; }
+  .moduleTop .primary { flex-shrink: 0; }
+  .salaryGrid, .projectFormGrid, .formGrid { min-width: 0; }
+  .tableWrap { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
+@media (max-width: 700px) {
+  .salaryGrid, .projectFormGrid, .formGrid { grid-template-columns: 1fr; }
+  .moduleTop { align-items: stretch; flex-direction: column; }
+  .moduleTop .primary { width: 100%; }
+}

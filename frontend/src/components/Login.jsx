@@ -1,9 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
-import * as I from "lucide-react";
-import { api, getToken, setToken, clearToken } from "../api";
-import { normalizeRole, all } from "../utils/navigation";
+import { useState } from "react";
+import { api, setToken, clearToken } from "../api";
 
 import triobyteLogo from "../Triobyte.jpeg";
+import { MoveRight } from "lucide-react";
 function Login({ onLogin }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -118,15 +117,12 @@ function Login({ onLogin }) {
             </h1>
 
             <p>
-              A focused workspace for projects, people,
-              progress, and everything that keeps TrioByte moving.
+            Build. Collaborate. Grow.
             </p>
           </div>
 
           <div className="loginFeatureList">
-            <span>Projects</span>
-            <span>People</span>
-            <span>Progress</span>
+            
           </div>
 
         </div>

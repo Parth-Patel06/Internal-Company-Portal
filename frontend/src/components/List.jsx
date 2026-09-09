@@ -1,6 +1,7 @@
-import React, { useState } from "react";
-import { normalizeRole } from "../utils/navigation";
-import { api } from "../api";
+import { useState } from "react";
+import { normalizeRole, hasPermission } from "../utils/navigation";
+import EmployeeEditModal from "./EmployeeEditModal";
+import { formatCompanyDate, formatCompanyDateTime, formatCompanyTime } from "../utils/dateTime";
 
 function canBlockTarget(actorRole, actorId, row) {
   const actor = normalizeRole(actorRole);
@@ -84,19 +85,18 @@ function List({
   onBlockToggle,
   onOffboard,
   onCancelOffboarding,
+  onEmployeeUpdated,
+  permissions,
 }) {
   const [pendingBlock, setPendingBlock] = useState(null);
   const [busy, setBusy] = useState(false);
   const [roleEditor, setRoleEditor] = useState(null);
-  const [roleValue, setRoleValue] = useState("");
-  const [levelValue, setLevelValue] = useState("");
-  const [roleError, setRoleError] = useState("");
-  const [roleBusy, setRoleBusy] = useState(false);
 
   const actor = normalizeRole(actorRole);
   const managementRole = ["CEO", "ADMIN", "HR"].includes(actor);
-  const roleOptions = getAllowedRoles(actor);
-  const levelOptions = ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10"];
+  const canEditEmployee = hasPermission(permissions, "employees.edit");
+  const canBlockEmployee = hasPermission(permissions, "employees.block");
+  const canOffboardEmployee = hasPermission(permissions, "offboarding.manage");
 
   if (!rows || rows.length === 0) {
     return <div className="card empty">No data available.</div>;
@@ -126,9 +126,9 @@ function List({
               const status = getEmploymentStatus(row);
               const isOffboarding = status === "OFFBOARDING";
               const isExited = status === "EXITED";
-              const blockAllowed = canBlockTarget(actor, actorId, row);
-              const manageAllowed = canOffboardTarget(actor, actorId, row);
-              const roleEditAllowed = canEditRoleTarget(actor, actorId, row);
+              const blockAllowed = canBlockEmployee && canBlockTarget(actor, actorId, row);
+              const manageAllowed = canOffboardEmployee && canOffboardTarget(actor, actorId, row);
+              const roleEditAllowed = canEditEmployee && canEditRoleTarget(actor, actorId, row);
 
               return (
                 <tr key={row.id || index}>
@@ -140,6 +140,12 @@ function List({
                         <StatusBadge row={row} />
                       ) : typeof row[field] === "boolean" ? (
                         row[field] ? "Yes" : "No"
+                      ) : ["login_at", "logout_at", "created_at", "updated_at", "reviewed_at", "approved_at", "processed_at"].includes(field) ? (
+                        formatCompanyDateTime(row[field])
+                      ) : ["check_in", "check_out"].includes(field) ? (
+                        formatCompanyTime(row[field])
+                      ) : ["work_date", "from_date", "to_date", "start_date", "end_date", "deadline", "due_date", "date"].includes(field) ? (
+                        formatCompanyDate(row[field])
                       ) : (
                         String(row[field] ?? "—")
                       )}
@@ -155,7 +161,7 @@ function List({
                       ) : isOffboarding ? (
                         <div className="listActions" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                           <span className="muted">Offboarding</span>
-                          {onCancelOffboarding && (
+                          {canOffboardEmployee && onCancelOffboarding && (
                             <button
                               type="button"
                               className="secondary smallAction"
@@ -182,14 +188,9 @@ function List({
                             <button
                               type="button"
                               className="secondary smallAction"
-                              onClick={() => {
-                                setRoleEditor(row);
-                                setRoleValue(normalizeRole(row.role));
-                                setLevelValue(String(row.employee_level || (normalizeRole(row.role) === "INTERN" ? "Intern" : "L1")));
-                                setRoleError("");
-                              }}
+                              onClick={() => setRoleEditor(row)}
                             >
-                              Edit Role
+                              Edit
                             </button>
                           )}
 
@@ -215,94 +216,16 @@ function List({
 
 
       {roleEditor && (
-        <div
-          className="portalModalBackdrop"
-          onClick={() => !roleBusy && setRoleEditor(null)}
-        >
-          <div className="portalModal" onClick={(e) => e.stopPropagation()}>
-            <h3>Update role & employee level</h3>
-            <p>
-              Update access and level for {roleEditor.full_name || "this user"}.
-            </p>
-
-            {roleError && <div className="formMessage error">{roleError}</div>}
-
-            <div className="formGrid" style={{ marginTop: 16 }}>
-              <label>
-                Role
-                <select
-                  value={roleValue}
-                  disabled={roleBusy}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    setRoleValue(next);
-                    if (next === "INTERN") setLevelValue("Intern");
-                    else if (levelValue === "Intern") setLevelValue("L1");
-                  }}
-                >
-                  {roleOptions.map((option) => (
-                    <option key={option} value={option}>{option}</option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                Employee Level
-                <select
-                  value={levelValue}
-                  disabled={roleBusy || roleValue === "INTERN"}
-                  onChange={(e) => setLevelValue(e.target.value)}
-                >
-                  {roleValue === "INTERN" ? (
-                    <option value="Intern">Intern</option>
-                  ) : (
-                    levelOptions.map((option) => (
-                      <option key={option} value={option}>{option}</option>
-                    ))
-                  )}
-                </select>
-              </label>
-            </div>
-
-            <div className="modalActions">
-              <button
-                type="button"
-                className="secondary"
-                disabled={roleBusy}
-                onClick={() => setRoleEditor(null)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="primary"
-                disabled={roleBusy}
-                onClick={async () => {
-                  setRoleBusy(true);
-                  setRoleError("");
-                  try {
-                    const updated = await api(`/api/users/${roleEditor.id}/role`, {
-                      method: "PUT",
-                      body: {
-                        role: roleValue,
-                        employee_level: levelValue,
-                      },
-                    });
-                    roleEditor.role = updated.role;
-                    roleEditor.employee_level = updated.employee_level;
-                    setRoleEditor(null);
-                  } catch (error) {
-                    setRoleError(error.message || "Unable to update role.");
-                  } finally {
-                    setRoleBusy(false);
-                  }
-                }}
-              >
-                {roleBusy ? "Saving..." : "Save Changes"}
-              </button>
-            </div>
-          </div>
-        </div>
+        <EmployeeEditModal
+          user={roleEditor}
+          actorRole={actor}
+          permissions={permissions}
+          onClose={() => setRoleEditor(null)}
+          onSaved={() => {
+            setRoleEditor(null);
+            onEmployeeUpdated?.();
+          }}
+        />
       )}
 
       {pendingBlock && (

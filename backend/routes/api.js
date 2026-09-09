@@ -1,11 +1,109 @@
 const router = require("express").Router();
 const pool = require("../db/pool");
 const bcrypt = require("bcryptjs");
+const multer = require("multer");
+const fs = require("fs");
+const path = require("path");
 const { auth, allow } = require("../middleware/auth");
+const { getEffectivePermissions, hasPermission, requirePermission, requireAnyPermission } = require("../middleware/permissions");
 
 router.use(auth);
 
+// Granular permission enforcement. Business rules inside individual handlers remain
+// authoritative (project membership, target restrictions, salary approval hierarchy, etc.).
+router.use(async (req, res, next) => {
+  const method = req.method.toUpperCase();
+  const path = req.path;
+  const rules = [];
+  const add = (...keys) => rules.push(keys);
+
+  if (method === 'GET' && path === '/dashboard') add('dashboard.view');
+  else if (method === 'GET' && path === '/users') add('employees.view');
+  else if (method === 'POST' && path === '/users') add('employees.create');
+  else if (method === 'GET' && /^\/users\/\d+\/permissions$/.test(path)) add('employees.manage_permissions');
+  else if (method === 'PUT' && /^\/users\/\d+\/permissions$/.test(path)) add('employees.manage_permissions');
+  else if (method === 'PUT' && /^\/users\/\d+$/.test(path)) add('employees.edit');
+  else if (method === 'POST' && /^\/users\/\d+\/(block|unblock)$/.test(path)) add('employees.block');
+  else if (method === 'GET' && /^\/users\/\d+\/offboarding$/.test(path)) add('offboarding.manage');
+  else if (method === 'POST' && /^\/users\/\d+\/offboarding\/(start|cancel)$/.test(path)) add('offboarding.manage');
+  else if (method === 'GET' && /^\/users\/\d+\/archived-work$/.test(path)) add('offboarding.manage');
+  else if (method === 'GET' && (path === '/projects' || /^\/projects\/\d+$/.test(path))) add('projects.view_all', 'projects.view_assigned');
+  else if (method === 'POST' && path === '/projects') add('projects.create');
+  else if (method === 'PUT' && /^\/projects\/\d+$/.test(path)) add('projects.edit');
+  else if (method === 'POST' && /^\/projects\/\d+\/next-phase$/.test(path)) add('projects.change_phase');
+  else if (method === 'POST' && path === '/tasks') add('tasks.assign', 'tasks.create');
+  else if (method === 'PUT' && /^\/tasks\/\d+$/.test(path)) add('tasks.edit');
+  else if (method === 'PUT' && /^\/tasks\/\d+\/progress$/.test(path)) add('tasks.update_progress');
+  else if (method === 'DELETE' && /^\/tasks\/\d+$/.test(path)) add('tasks.delete');
+  else if (method === 'GET' && path === '/attendance') add('attendance.view_all', 'attendance.view_own');
+  else if (method === 'GET' && path === '/leave') add('leave.view_all', 'leave.view_own');
+  else if (method === 'POST' && path === '/leave') add('leave.apply');
+  else if (method === 'PUT' && /^\/leave\/\d+$/.test(path)) add('leave.approve', 'leave.reject');
+  else if (method === 'GET' && path === '/daily-work') add('daily_work.view_all', 'daily_work.view_own');
+  else if (method === 'POST' && path === '/daily-work') add('daily_work.create');
+  // Salary and Overtime are intentionally disabled.
+  // else if (method === 'GET' && path === '/salary') add('salary.view_all', 'salary.view_own');
+  // else if (method === 'PUT' && /^\\/salary\\/\\d+\\/approval$/.test(path)) add('salary.review', 'salary.approve', 'salary.process');
+  // else if (method === 'GET' && path === '/overtime') add('overtime.view_all', 'overtime.view_own');
+  else if (method === 'GET' && path === '/announcements') add('announcements.view');
+  else if (method === 'POST' && path === '/announcements') add('announcements.create');
+  // Repository access is controlled by project membership/leadership.
+  // Do not block Code Management through global code permissions.
+  else if (path === '/repos' || path.startsWith('/repos/')) { /* project-level access below */ }
+  else if (method === 'GET' && /^\/repos\/\d+$/.test(path)) add('code.view');
+  else if (method === 'POST' && /^\/repos\/\d+\/files$/.test(path)) add('code.upload');
+  else if (method === 'GET' && /^\/repos\/\d+\/files\/\d+\/download$/.test(path)) add('code.download');
+  else if (method === 'DELETE' && /^\/repos\/\d+\/files\/\d+$/.test(path)) add('code.delete_files');
+  else if (method === 'POST' && /^\/repos\/\d+\/merge-requests$/.test(path)) add('code.create_mr');
+  else if (method === 'PATCH' && /^\/repos\/\d+\/merge-requests\/\d+$/.test(path)) add('code.review_mr', 'code.approve_mr', 'code.merge');
+  else if (method === 'GET' && /^\/repos\/\d+\/versions\/\d+$/.test(path)) add('code.view');
+  else if (path.startsWith('/chat/monitoring')) add('message_monitoring.view');
+  else if (path.startsWith('/chat')) add('chat.use');
+  else if (method === 'GET' && path === '/chat') add('message_monitoring.view', 'chat.use');
+  else if (method === 'GET' && path === '/logs') add('message_monitoring.view');
+
+  if (!rules.length) return next();
+  try {
+    for (const key of rules[0]) {
+      if (await requirePermissionCheck(req.user.id, key)) return next();
+    }
+    return res.status(403).json({ message: `Permission denied: ${rules[0].join(' or ')}` });
+  } catch (error) {
+    console.error('GLOBAL PERMISSION GATE ERROR:', error);
+    return res.status(500).json({ message: 'Unable to verify permissions' });
+  }
+});
+
+async function requirePermissionCheck(userId, key) {
+  const rows = await pool.query(`
+    SELECT COALESCE(up.access, rp.access, 'DENY') AS access
+    FROM users u
+    JOIN permissions p ON p.permission_key = $2
+    LEFT JOIN role_permissions rp ON rp.role = UPPER(TRIM(u.role)) AND rp.permission_id = p.id
+    LEFT JOIN user_permissions up ON up.user_id = u.id AND up.permission_id = p.id
+    WHERE u.id = $1 LIMIT 1
+  `, [userId, key]);
+  return rows.rows[0]?.access === 'ALLOW';
+}
+
 const q = async (sql, params = []) => (await pool.query(sql, params)).rows;
+
+const chatUploadDir = path.join(__dirname, "..", "uploads", "chat");
+fs.mkdirSync(chatUploadDir, { recursive: true });
+
+const chatUploadStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, chatUploadDir),
+  filename: (_req, file, cb) => {
+    const safeExt = path.extname(file.originalname || "").toLowerCase().slice(0, 10);
+    const safeName = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${safeExt}`;
+    cb(null, safeName);
+  }
+});
+
+const chatUpload = multer({
+  storage: chatUploadStorage,
+  limits: { fileSize: 25 * 1024 * 1024 }
+});
 
 function roleOf(user) {
   return String(user.role || "")
@@ -35,17 +133,10 @@ function ownOrManagement(user, userColumn = "user_id") {
 
 async function getProjectAccess(projectId, user) {
   const role = roleOf(user);
-
-  // CEO and Admin can manage every project
-  if (["CEO", "ADMIN"].includes(role)) {
-    return {
-      exists: true,
-      canView: true,
-      canManage: true,
-      isLead: false,
-      isMember: false
-    };
-  }
+  const canViewAll = await hasPermission(user.id, "projects.view_all");
+  const canViewAssigned = await hasPermission(user.id, "projects.view_assigned");
+  const canEdit = await hasPermission(user.id, "projects.edit");
+  const canManageMembers = await hasPermission(user.id, "projects.manage_members");
 
   const projectRows = await q(
     `SELECT id, lead_id, created_by
@@ -86,12 +177,12 @@ async function getProjectAccess(projectId, user) {
 
   const canManage =
     isLead ||
-    (role === "HR" && isCreator);
+    (isCreator && role === "HR" && canEdit) ||
+    ((role === "CEO" || role === "ADMIN") && (canEdit || canManageMembers));
 
   const canView =
-    isLead ||
-    isMember ||
-    (role === "HR" && isCreator);
+    (canViewAll) ||
+    (canViewAssigned && (isLead || isMember || isCreator));
 
   return {
     exists: true,
@@ -110,11 +201,26 @@ router.get("/me", async (req, res) => {
 
 /* ==================== PROFILE ==================== */
 
+router.get("/me/permissions", async (req, res) => {
+  try {
+    const permissions = await getEffectivePermissions(req.user.id);
+    res.json({ permissions });
+  } catch (error) {
+    console.error("ME PERMISSIONS ERROR:", error);
+    res.status(500).json({ message: "Unable to load permissions" });
+  }
+});
+
 router.put("/profile", async (req, res) => {
   try {
     const fullName = String(req.body.full_name || "").trim();
     const mobile = String(req.body.mobile || "").trim();
     const address = String(req.body.address || "").trim();
+    const photoUrl = req.body.photo_url == null ? null : String(req.body.photo_url).trim();
+
+    if (photoUrl && photoUrl.length > 2_000_000) {
+      return res.status(400).json({ message: "Profile photo is too large." });
+    }
 
     if (!fullName) {
       return res.status(400).json({ message: "Full name is required" });
@@ -146,6 +252,54 @@ router.put("/profile", async (req, res) => {
   } catch (error) {
     console.error("PROFILE UPDATE ERROR:", error);
     res.status(500).json({ message: "Unable to update profile" });
+  }
+});
+
+
+router.get("/profile/overview", async (req, res) => {
+  try {
+    const userId = Number(req.user.id);
+
+    const tasks = await q(
+      `SELECT DISTINCT
+         t.id,
+         t.title,
+         t.deadline,
+         t.status,
+         p.name AS project_name,
+         ta.status AS assignment_status
+       FROM tasks t
+       LEFT JOIN projects p ON p.id = t.project_id
+       LEFT JOIN task_assignments ta
+         ON ta.task_id = t.id
+        AND ta.user_id = $1
+       WHERE t.assignee_id = $1
+          OR ta.user_id = $1
+       ORDER BY t.deadline NULLS LAST, t.id DESC`,
+      [userId]
+    );
+
+    const projects = await q(
+      `SELECT DISTINCT
+         p.id,
+         p.name,
+         p.status,
+         p.progress,
+         p.deadline
+       FROM projects p
+       LEFT JOIN project_members pm
+         ON pm.project_id = p.id
+        AND pm.user_id = $1
+       WHERE pm.user_id = $1
+          OR p.lead_id = $1
+       ORDER BY p.deadline NULLS LAST, p.id DESC`,
+      [userId]
+    );
+
+    res.json({ tasks, projects });
+  } catch (error) {
+    console.error("PROFILE OVERVIEW ERROR:", error);
+    res.status(500).json({ message: "Unable to load profile overview" });
   }
 });
 
@@ -400,7 +554,9 @@ router.get("/activity", allow("CEO", "ADMIN", "HR"), async (req, res) => {
          END AS session_status
        FROM login_logs l
        JOIN users u ON u.id = l.user_id
-       ORDER BY l.login_at DESC
+       ORDER BY
+         CASE WHEN l.logout_at IS NULL THEN 0 ELSE 1 END,
+         l.login_at DESC
        LIMIT 500`
     );
     res.json(rows);
@@ -667,6 +823,168 @@ router.post("/users", allow("CEO", "ADMIN", "HR"), async (req, res) => {
 });
 
 
+/* ==================== EMPLOYEE EDIT + PERMISSIONS ==================== */
+
+function canManageEmployeeTarget(actor, target) {
+  const actorRole = roleOf(actor);
+  const targetRole = roleOf(target);
+
+  if (!['CEO', 'ADMIN', 'HR'].includes(actorRole)) return false;
+  if (targetRole === 'CEO') return false;
+  if (Number(actor.id) === Number(target.id)) return false;
+
+  if (actorRole === 'CEO') return true;
+  if (actorRole === 'ADMIN') return ['HR', 'EMPLOYEE', 'INTERN'].includes(targetRole);
+  if (actorRole === 'HR') return ['EMPLOYEE', 'INTERN'].includes(targetRole);
+  return false;
+}
+
+function allowedRoleChanges(actor, targetRole, newRole) {
+  const actorRole = roleOf(actor);
+  if (targetRole === 'CEO') return false;
+  if (actorRole === 'CEO') return ['CEO', 'ADMIN', 'HR', 'EMPLOYEE', 'INTERN'].includes(newRole);
+  if (actorRole === 'ADMIN') return ['HR', 'EMPLOYEE', 'INTERN'].includes(newRole);
+  if (actorRole === 'HR') return ['HR', 'EMPLOYEE', 'INTERN'].includes(newRole);
+  return false;
+}
+
+router.get('/users/:id/permissions', requirePermission('employees.manage_permissions'), async (req, res) => {
+  try {
+    const target = (await q('SELECT id, full_name, role FROM users WHERE id = $1', [req.params.id]))[0];
+    if (!target) return res.status(404).json({ message: 'User not found' });
+    const rows = await getEffectivePermissions(target.id);
+    const overrides = await q(`
+      SELECT p.permission_key, up.access
+      FROM user_permissions up
+      JOIN permissions p ON p.id = up.permission_id
+      WHERE up.user_id = $1
+      ORDER BY p.module, p.permission_name
+    `, [target.id]);
+    res.json({ user: target, permissions: rows, overrides });
+  } catch (error) {
+    console.error('GET USER PERMISSIONS ERROR:', error);
+    res.status(500).json({ message: 'Unable to load permissions' });
+  }
+});
+
+router.put('/users/:id/permissions', requirePermission('employees.manage_permissions'), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const target = (await q('SELECT id, full_name, role FROM users WHERE id = $1', [req.params.id]))[0];
+    if (!target) return res.status(404).json({ message: 'User not found' });
+    if (!canManageEmployeeTarget(req.user, target)) return res.status(403).json({ message: 'You cannot manage permissions for this employee' });
+
+    const requested = Array.isArray(req.body.permissions) ? req.body.permissions : [];
+    await client.query('BEGIN');
+
+    for (const item of requested) {
+      const key = String(item.permission_key || '').trim();
+      const access = String(item.access || '').trim().toUpperCase();
+      if (!key || !['ALLOW', 'DENY', 'DEFAULT'].includes(access)) continue;
+
+      const permission = (await client.query('SELECT id FROM permissions WHERE permission_key = $1', [key])).rows[0];
+      if (!permission) continue;
+
+      const old = (await client.query(`SELECT access FROM user_permissions WHERE user_id = $1 AND permission_id = $2`, [target.id, permission.id])).rows[0];
+      if (access === 'DEFAULT') {
+        if (old) {
+          await client.query('DELETE FROM user_permissions WHERE user_id = $1 AND permission_id = $2', [target.id, permission.id]);
+          await client.query(`INSERT INTO permission_audit_log(target_user_id, permission_id, old_access, new_access, changed_by, reason) VALUES($1,$2,$3,NULL,$4,$5)`, [target.id, permission.id, old.access, req.user.id, req.body.reason || 'Reset to role default']);
+        }
+      } else if (!old || old.access !== access) {
+        await client.query(`
+          INSERT INTO user_permissions(user_id, permission_id, access, granted_by)
+          VALUES($1,$2,$3,$4)
+          ON CONFLICT(user_id, permission_id)
+          DO UPDATE SET access = EXCLUDED.access, granted_by = EXCLUDED.granted_by, updated_at = NOW()
+        `, [target.id, permission.id, access, req.user.id]);
+        await client.query(`INSERT INTO permission_audit_log(target_user_id, permission_id, old_access, new_access, changed_by, reason) VALUES($1,$2,$3,$4,$5,$6)`, [target.id, permission.id, old?.access || null, access, req.user.id, req.body.reason || 'Permission updated']);
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({ message: 'Permissions updated successfully', permissions: await getEffectivePermissions(target.id) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('UPDATE USER PERMISSIONS ERROR:', error);
+    res.status(400).json({ message: error.detail || error.message || 'Unable to update permissions' });
+  } finally {
+    client.release();
+  }
+});
+
+router.put('/users/:id', allow('CEO', 'ADMIN', 'HR'), async (req, res) => {
+  try {
+    const target = (await q(`SELECT id, employee_id, full_name, email, role, employee_level, department, designation, employment_type, company_id, mobile, address, joining_date, end_date, permanent, assigned_mentor, photo_url, must_change_password, blocked, employment_status, email_status FROM users WHERE id = $1`, [req.params.id]))[0];
+    if (!target) return res.status(404).json({ message: 'User not found' });
+    if (!canManageEmployeeTarget(req.user, target)) return res.status(403).json({ message: 'You cannot edit this employee' });
+
+    const b = req.body || {};
+    const actorRole = roleOf(req.user);
+    const newRole = String(b.role ?? target.role).trim().toUpperCase();
+    const newLevel = String(b.employee_level ?? target.employee_level ?? (newRole === 'INTERN' ? 'Intern' : 'L1')).trim();
+
+    if (!['CEO','ADMIN','HR','EMPLOYEE','INTERN'].includes(newRole)) return res.status(400).json({ message: 'Invalid role' });
+    if (!allowedRoleChanges(req.user, target.role, newRole)) return res.status(403).json({ message: 'You are not allowed to assign that role' });
+    if (newRole === 'INTERN') {
+      // Interns use the dedicated Intern level label in the existing portal.
+      if (!newLevel || newLevel.toUpperCase() !== 'INTERN') return res.status(400).json({ message: 'Intern level must be Intern' });
+    } else if (!/^L([1-9]|10)$/.test(newLevel)) {
+      return res.status(400).json({ message: 'Employee level must be L1-L10' });
+    }
+
+    const fields = {
+      full_name: b.full_name ?? target.full_name,
+      email: String(b.email ?? target.email).trim().toLowerCase(),
+      role: newRole,
+      employee_level: newLevel,
+      department: b.department ?? target.department,
+      designation: b.designation ?? target.designation,
+      employment_type: b.employment_type ?? target.employment_type,
+      company_id: b.company_id ?? target.company_id,
+      mobile: b.mobile ?? target.mobile,
+      address: b.address ?? target.address,
+      joining_date: b.joining_date || null,
+      end_date: b.end_date || null,
+      permanent: newRole === 'INTERN' ? false : b.permanent !== undefined ? Boolean(b.permanent) : target.permanent,
+      assigned_mentor: b.assigned_mentor ?? target.assigned_mentor,
+      photo_url: b.photo_url ?? target.photo_url,
+      must_change_password: b.must_change_password !== undefined ? Boolean(b.must_change_password) : target.must_change_password,
+    };
+
+    // HR may edit employee details, but cannot alter security/account flags through this endpoint.
+    if (actorRole === 'HR') {
+      fields.must_change_password = target.must_change_password;
+    }
+
+    const updated = (await q(`
+      UPDATE users SET
+        full_name=$1, email=$2, role=$3, employee_level=$4, department=$5, designation=$6,
+        employment_type=$7, company_id=$8, mobile=$9, address=$10, joining_date=$11, end_date=$12,
+        permanent=$13, assigned_mentor=$14, photo_url=$15, must_change_password=$16
+      WHERE id=$17
+      RETURNING id, employee_id, full_name, email, role, employee_level, department, designation,
+        employment_type, company_id, mobile, address, joining_date, end_date, permanent,
+        assigned_mentor, photo_url, must_change_password, blocked, employment_status, email_status
+    `, [fields.full_name, fields.email, fields.role, fields.employee_level, fields.department, fields.designation,
+      fields.employment_type, fields.company_id, fields.mobile, fields.address, fields.joining_date, fields.end_date,
+      fields.permanent, fields.assigned_mentor, fields.photo_url, fields.must_change_password, target.id]))[0];
+
+    if (target.role !== newRole || String(target.employee_level || '') !== newLevel) {
+      await q(`INSERT INTO role_change_log(user_id, old_role, new_role, old_level, new_level, changed_by, reason) VALUES($1,$2,$3,$4,$5,$6,$7)`, [target.id, target.role, newRole, target.employee_level, newLevel, req.user.id, b.reason || 'Employee role/level updated']);
+      if (target.employee_level !== newLevel) {
+        await q(`INSERT INTO promotion_history(user_id, old_level, new_level, old_role, new_role, effective_date, reason, promoted_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [target.id, target.employee_level, newLevel, target.role, newRole, b.effective_date || new Date().toISOString().slice(0,10), b.reason || 'Role/level change', req.user.id]);
+      }
+    }
+
+    res.json({ message: 'Employee updated successfully', user: updated });
+  } catch (error) {
+    console.error('UPDATE USER ERROR:', error);
+    res.status(400).json({ message: error.detail || error.message || 'Unable to update employee' });
+  }
+});
+
+
 /* ==================== BLOCK + OFFBOARDING ==================== */
 
 const OFFBOARDING_FORWARD_EMAIL = process.env.OFFBOARDING_FORWARD_EMAIL || "hr@triobyte.demo";
@@ -929,7 +1247,7 @@ router.post("/users/:id/unblock", allow("CEO", "ADMIN", "HR"), async (req, res) 
 
 /* ==================== OFFBOARDING ==================== */
 
-router.get("/users/:id/offboarding", allow("CEO", "ADMIN", "HR"), async (req, res) => {
+router.get("/users/:id/offboarding", requirePermission("offboarding.manage"), async (req, res) => {
   try {
     const rows = await q(
       `SELECT
@@ -1008,7 +1326,7 @@ router.get("/users/:id/offboarding", allow("CEO", "ADMIN", "HR"), async (req, re
   }
 });
 
-router.post("/users/:id/offboarding/start", allow("CEO", "ADMIN", "HR"), async (req, res) => {
+router.post("/users/:id/offboarding/start", requirePermission("offboarding.manage"), async (req, res) => {
   const client = await pool.connect();
 
   try {
@@ -1230,7 +1548,7 @@ router.post("/users/:id/offboarding/start", allow("CEO", "ADMIN", "HR"), async (
   }
 });
 
-router.post("/users/:id/offboarding/cancel", allow("CEO", "ADMIN", "HR"), async (req, res) => {
+router.post("/users/:id/offboarding/cancel", requirePermission("offboarding.manage"), async (req, res) => {
   const client = await pool.connect();
 
   try {
@@ -1340,7 +1658,7 @@ router.post("/users/:id/offboarding/cancel", allow("CEO", "ADMIN", "HR"), async 
   }
 });
 
-router.get("/users/:id/archived-work", allow("CEO", "ADMIN", "HR"), async (req, res) => {
+router.get("/users/:id/archived-work", requirePermission("offboarding.manage"), async (req, res) => {
   try {
     const rows = await q(
       `SELECT
@@ -1368,7 +1686,11 @@ router.get("/users/:id/archived-work", allow("CEO", "ADMIN", "HR"), async (req, 
 
 router.get("/projects", async (req, res) => {
   try {
-    const rows = isManagement(req.user)
+    const canViewAll = await hasPermission(req.user.id, "projects.view_all");
+    const canViewAssigned = await hasPermission(req.user.id, "projects.view_assigned");
+    if (!canViewAll && !canViewAssigned) return res.status(403).json({ message: "Permission denied" });
+
+    const rows = canViewAll
       ? await q(
           `SELECT
              p.*,
@@ -1902,6 +2224,8 @@ router.post("/projects/:id/next-phase", async (req, res) => {
 /* ==================== TASKS ==================== */
 
 async function taskCanManage(taskId, user) {
+  const canEdit = await hasPermission(user.id, "tasks.edit");
+  if (!canEdit) return false;
   if (isManagement(user)) return true;
 
   const rows = await q(
@@ -1934,7 +2258,7 @@ router.post("/tasks", async (req, res) => {
 
     const access = await getProjectAccess(projectId, req.user);
     if (!access.exists) return res.status(404).json({ message: "Project not found" });
-    if (!(isManagement(req.user) || access.isLead)) {
+    if (!(access.isLead || await hasPermission(req.user.id, "tasks.assign"))) {
       return res.status(403).json({ message: "Only management or the project lead can create this task" });
     }
 
@@ -2099,43 +2423,55 @@ router.delete("/tasks/:id", async (req, res) => {
 /* ==================== ATTENDANCE ==================== */
 
 router.get("/attendance", async (req, res) => {
-  const rows = isManagement(req.user)
-    ? await q(
-        `SELECT a.*, u.full_name, u.employee_id
-         FROM attendance a
-         LEFT JOIN users u ON u.id = a.user_id
-         ORDER BY a.work_date DESC`
-      )
-    : await q(
-        `SELECT *
-         FROM attendance
-         WHERE user_id = $1
-         ORDER BY work_date DESC`,
-        [req.user.id]
-      );
-
-  res.json(rows);
+  const canViewAll = await hasPermission(req.user.id, "attendance.view_all");
+  const canViewOwn = await hasPermission(req.user.id, "attendance.view_own");
+  if (canViewAll) {
+    const rows = await q(
+      `SELECT a.*, u.full_name, u.employee_id
+       FROM attendance a
+       LEFT JOIN users u ON u.id = a.user_id
+       ORDER BY a.work_date DESC`
+    );
+    return res.json(rows);
+  }
+  if (canViewOwn) {
+    const rows = await q(
+      `SELECT *
+       FROM attendance
+       WHERE user_id = $1
+       ORDER BY work_date DESC`,
+      [req.user.id]
+    );
+    return res.json(rows);
+  }
+  return res.status(403).json({ message: "Permission denied" });
 });
 
 /* ==================== LEAVE ==================== */
 
 router.get("/leave", async (req, res) => {
-  const rows = isManagement(req.user)
-    ? await q(
-        `SELECT l.*, u.full_name, u.employee_id
-         FROM leave_requests l
-         LEFT JOIN users u ON u.id = l.user_id
-         ORDER BY l.id DESC`
-      )
-    : await q(
-        `SELECT *
-         FROM leave_requests
-         WHERE user_id = $1
-         ORDER BY id DESC`,
-        [req.user.id]
-      );
-
-  res.json(rows);
+  const canViewAll = await hasPermission(req.user.id, "leave.view_all");
+  const canViewOwn = await hasPermission(req.user.id, "leave.view_own");
+  if (canViewAll) {
+    const rows = await q(
+      `SELECT l.*, u.full_name, u.employee_id
+       FROM leave_requests l
+       LEFT JOIN users u ON u.id = l.user_id
+       ORDER BY l.id DESC`
+    );
+    return res.json(rows);
+  }
+  if (canViewOwn) {
+    const rows = await q(
+      `SELECT *
+       FROM leave_requests
+       WHERE user_id = $1
+       ORDER BY id DESC`,
+      [req.user.id]
+    );
+    return res.json(rows);
+  }
+  return res.status(403).json({ message: "Permission denied" });
 });
 
 router.post("/leave", async (req, res) => {
@@ -2161,9 +2497,16 @@ router.post("/leave", async (req, res) => {
 
 router.put(
   "/leave/:id",
-  allow("CEO", "ADMIN", "HR"),
+  auth,
   async (req, res) => {
     const status = String(req.body.status || "");
+    const permissionKey = status === "Approved" ? "leave.approve"
+      : status === "Rejected" ? "leave.reject"
+      : null;
+
+    if (!permissionKey || !(await hasPermission(req.user.id, permissionKey))) {
+      return res.status(403).json({ message: "Permission denied for this leave action" });
+    }
 
     if (!["Pending", "Approved", "Rejected"].includes(status)) {
       return res.status(400).json({ message: "Invalid leave status" });
@@ -2190,22 +2533,28 @@ router.put(
 /* ==================== DAILY WORK ==================== */
 
 router.get("/daily-work", async (req, res) => {
-  const rows = isManagement(req.user)
-    ? await q(
-        `SELECT d.*, u.full_name, u.employee_id
-         FROM daily_work_logs d
-         LEFT JOIN users u ON u.id = d.user_id
-         ORDER BY d.work_date DESC, d.id DESC`
-      )
-    : await q(
-        `SELECT *
-         FROM daily_work_logs
-         WHERE user_id = $1
-         ORDER BY work_date DESC, id DESC`,
-        [req.user.id]
-      );
-
-  res.json(rows);
+  const canViewAll = await hasPermission(req.user.id, "daily_work.view_all");
+  const canViewOwn = await hasPermission(req.user.id, "daily_work.view_own");
+  if (canViewAll) {
+    const rows = await q(
+      `SELECT d.*, u.full_name, u.employee_id
+       FROM daily_work_logs d
+       LEFT JOIN users u ON u.id = d.user_id
+       ORDER BY d.work_date DESC, d.id DESC`
+    );
+    return res.json(rows);
+  }
+  if (canViewOwn) {
+    const rows = await q(
+      `SELECT *
+       FROM daily_work_logs
+       WHERE user_id = $1
+       ORDER BY work_date DESC, id DESC`,
+      [req.user.id]
+    );
+    return res.json(rows);
+  }
+  return res.status(403).json({ message: "Permission denied" });
 });
 
 router.post("/daily-work", async (req, res) => {
@@ -2230,62 +2579,65 @@ router.post("/daily-work", async (req, res) => {
   res.status(201).json(rows[0]);
 });
 
-/* ==================== SALARY ==================== */
-
-router.get("/salary", async (req, res) => {
-  const rows = isManagement(req.user)
-    ? await q(
-        `SELECT s.*, u.full_name, u.employee_id, u.role AS employee_role,
-                u.department, u.designation,
-                reviewer.full_name AS reviewed_by_name,
-                approver.full_name AS approved_by_name,
-                processor.full_name AS processed_by_name
-         FROM salary_records s
-         LEFT JOIN users u ON u.id = s.user_id
-         LEFT JOIN users reviewer ON reviewer.id = s.reviewed_by
-         LEFT JOIN users approver ON approver.id = s.approved_by
-         LEFT JOIN users processor ON processor.id = s.processed_by
-         ORDER BY s.month DESC, s.id DESC`
-      )
-    : await q(
-        `SELECT s.*, u.full_name, u.employee_id, u.role AS employee_role,
-                u.department, u.designation,
-                reviewer.full_name AS reviewed_by_name,
-                approver.full_name AS approved_by_name,
-                processor.full_name AS processed_by_name
-         FROM salary_records s
-         LEFT JOIN users u ON u.id = s.user_id
-         LEFT JOIN users reviewer ON reviewer.id = s.reviewed_by
-         LEFT JOIN users approver ON approver.id = s.approved_by
-         LEFT JOIN users processor ON processor.id = s.processed_by
-         WHERE s.user_id = $1
-         ORDER BY s.month DESC, s.id DESC`,
-        [req.user.id]
-      );
-
-  res.json(rows);
-});
-
-/* ==================== OVERTIME ==================== */
-
-router.get("/overtime", async (req, res) => {
-  const rows = isManagement(req.user)
-    ? await q(
-        `SELECT o.*, u.full_name, u.employee_id
-         FROM overtime o
-         LEFT JOIN users u ON u.id = o.user_id
-         ORDER BY o.work_date DESC, o.id DESC`
-      )
-    : await q(
-        `SELECT *
-         FROM overtime
-         WHERE user_id = $1
-         ORDER BY work_date DESC, id DESC`,
-        [req.user.id]
-      );
-
-  res.json(rows);
-});
+// /* ==================== SALARY ==================== */
+//
+// router.get("/salary", async (req, res) => {
+//   const rows = isManagement(req.user)
+//     ? await q(
+//         `SELECT s.*, u.full_name, u.employee_id, u.role AS employee_role,
+//                 u.department, u.designation,
+//                 reviewer.full_name AS reviewed_by_name,
+//                 approver.full_name AS approved_by_name,
+//                 processor.full_name AS processed_by_name
+//          FROM salary_records s
+//          LEFT JOIN users u ON u.id = s.user_id
+//          LEFT JOIN users reviewer ON reviewer.id = s.reviewed_by
+//          LEFT JOIN users approver ON approver.id = s.approved_by
+//          LEFT JOIN users processor ON processor.id = s.processed_by
+//          ORDER BY s.month DESC, s.id DESC`
+//       )
+//     : await q(
+//         `SELECT s.*, u.full_name, u.employee_id, u.role AS employee_role,
+//                 u.department, u.designation,
+//                 reviewer.full_name AS reviewed_by_name,
+//                 approver.full_name AS approved_by_name,
+//                 processor.full_name AS processed_by_name
+//          FROM salary_records s
+//          LEFT JOIN users u ON u.id = s.user_id
+//          LEFT JOIN users reviewer ON reviewer.id = s.reviewed_by
+//          LEFT JOIN users approver ON approver.id = s.approved_by
+//          LEFT JOIN users processor ON processor.id = s.processed_by
+//          WHERE s.user_id = $1
+//          ORDER BY s.month DESC, s.id DESC`,
+//         [req.user.id]
+//       );
+//
+//   res.json(rows);
+// });
+//
+// /* ==================== OVERTIME ==================== */
+//
+// router.get("/overtime", async (req, res) => {
+//   const rows = isManagement(req.user)
+//     ? await q(
+//         `SELECT o.*, u.full_name, u.employee_id
+//          FROM overtime o
+//          LEFT JOIN users u ON u.id = o.user_id
+//          ORDER BY o.work_date DESC, o.id DESC`
+//       )
+//     : await q(
+//         `SELECT *
+//          FROM overtime
+//          WHERE user_id = $1
+//          ORDER BY work_date DESC, id DESC`,
+//         [req.user.id]
+//       );
+//
+//   res.json(rows);
+// });
+//
+//
+//    Salary and Overtime are intentionally disabled.
 
 /* ==================== ANNOUNCEMENTS ==================== */
 /* Shared company data: every logged-in user can see these. */
@@ -2330,35 +2682,442 @@ router.post(
 /* ==================== REPOSITORIES ==================== */
 
 router.get("/repos", async (req, res) => {
-  const rows = isManagement(req.user)
-    ? await q(
-        `SELECT r.*, p.name AS project_name,
-                u.full_name AS owner_name
-         FROM repositories r
-         LEFT JOIN projects p ON p.id = r.project_id
-         LEFT JOIN users u ON u.id = r.owner_id
-         ORDER BY r.updated_at DESC`
-      )
-    : await q(
-        `SELECT DISTINCT
-           r.*,
-           p.name AS project_name
-         FROM repositories r
-         LEFT JOIN projects p ON p.id = r.project_id
-         WHERE
-           r.owner_id = $1
-           OR p.lead_id = $1
-           OR EXISTS (
-             SELECT 1
-             FROM project_members pm
-             WHERE pm.project_id = r.project_id
-               AND pm.user_id = $1
-           )
-         ORDER BY r.updated_at DESC`,
-        [req.user.id]
-      );
+  try {
+    const rows = await q(
+      `SELECT DISTINCT r.*, p.name AS project_name,
+              lead.full_name AS project_lead_name,
+              owner.full_name AS owner_name
+       FROM repositories r
+       LEFT JOIN projects p ON p.id = r.project_id
+       LEFT JOIN users lead ON lead.id = p.lead_id
+       LEFT JOIN users owner ON owner.id = r.owner_id
+       WHERE p.lead_id = $1
+          OR EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id = r.project_id AND pm.user_id = $1
+          )
+       ORDER BY r.updated_at DESC`,
+      [req.user.id]
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error("LIST REPOSITORIES ERROR:", error);
+    res.status(500).json({ message: "Unable to load repositories." });
+  }
+});
 
-  res.json(rows);
+/* ==================== CODE MANAGEMENT ==================== */
+
+const repoUploadDir = path.join(__dirname, "..", "uploads", "repositories");
+fs.mkdirSync(repoUploadDir, { recursive: true });
+
+const repoUploadStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, repoUploadDir),
+  filename: (_req, file, cb) => {
+    const safeExt = path.extname(file.originalname || "").toLowerCase().slice(0, 20);
+    const safeName = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${safeExt}`;
+    cb(null, safeName);
+  }
+});
+
+const repoUpload = multer({
+  storage: repoUploadStorage,
+  limits: { fileSize: 50 * 1024 * 1024 }
+});
+
+function isRepoManager(user, access) {
+  return isCEO(user) || roleOf(user) === "ADMIN" || access.canManage;
+}
+
+async function getRepoAccess(repoId, user) {
+  const rows = await q(
+    `SELECT r.id, r.name, r.project_id, r.owner_id, r.branch, r.updated_at,
+            p.name AS project_name, p.lead_id, p.created_by
+     FROM repositories r
+     LEFT JOIN projects p ON p.id = r.project_id
+     WHERE r.id = $1`,
+    [repoId]
+  );
+  const repo = rows[0];
+  if (!repo) return { exists: false, canView: false, canManage: false, repo: null };
+
+  const projectAccess = repo.project_id
+    ? await getProjectAccess(repo.project_id, user)
+    : { canView: false, canManage: false };
+
+  // Code Management access is strictly project-based. Project leads and
+  // project members can use the repository; users outside the project cannot.
+  const canAccessProject = Boolean(projectAccess.canView);
+
+  return {
+    exists: true,
+    repo,
+    canView: canAccessProject,
+    // This means the user can perform at least one code-management action on
+    // this repository. Individual routes are still protected by the specific
+    // granular permission gate (upload/delete/create MR/review/etc.).
+    canManage: canAccessProject,
+    isMember: Boolean(projectAccess.isMember),
+    isLead: Boolean(projectAccess.isLead),
+    projectAccess
+  };
+}
+
+router.post("/repos", async (req, res) => {
+  try {
+    const name = String(req.body.name || "").trim();
+    const projectId = Number(req.body.project_id);
+    const branch = String(req.body.branch || "main").trim() || "main";
+
+    if (!name) return res.status(400).json({ message: "Repository name is required." });
+    if (!Number.isInteger(projectId)) return res.status(400).json({ message: "A project is required." });
+
+    const access = await getProjectAccess(projectId, req.user);
+    if (!access.exists) return res.status(404).json({ message: "Project not found." });
+    if (!access.isLead) {
+      return res.status(403).json({ message: "Only the Project Lead can create a repository for this project." });
+    }
+
+    const duplicate = await q(
+      `SELECT id FROM repositories WHERE project_id = $1 AND LOWER(name) = LOWER($2)`,
+      [projectId, name]
+    );
+    if (duplicate[0]) return res.status(409).json({ message: "A repository with that name already exists in this project." });
+
+    const rows = await q(
+      `INSERT INTO repositories (name, project_id, owner_id, branch)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [name, projectId, req.user.id, branch]
+    );
+
+    await q(
+      `INSERT INTO repository_activity
+        (repository_id, action, target_type, target_id, target_name, details, created_by)
+       VALUES ($1, 'REPOSITORY_CREATED', 'repository', $2, $3, $4, $5)`,
+      [rows[0].id, rows[0].id, name, JSON.stringify({ project_id: projectId, branch }), req.user.id]
+    );
+
+    res.status(201).json(rows[0]);
+  } catch (error) {
+    console.error("CREATE REPOSITORY ERROR:", error);
+    res.status(500).json({ message: "Unable to create repository." });
+  }
+});
+
+router.get("/repos/:id", async (req, res) => {
+  try {
+    const access = await getRepoAccess(req.params.id, req.user);
+    if (!access.exists) return res.status(404).json({ message: "Repository not found." });
+    if (!access.canView) return res.status(403).json({ message: "You do not have access to this repository." });
+
+    const files = await q(
+      `SELECT f.id, f.path, f.original_name, f.mime_type, f.size, f.created_at,
+              f.uploaded_by, uploader.full_name AS uploaded_by_name,
+              f.version_id, v.version_no, v.message AS version_message
+       FROM repository_files f
+       LEFT JOIN repository_versions v ON v.id = f.version_id
+       LEFT JOIN users uploader ON uploader.id = f.uploaded_by
+       WHERE f.repository_id = $1
+       ORDER BY f.path ASC, f.id ASC`,
+      [req.params.id]
+    );
+
+    const versions = await q(
+      `SELECT v.id, v.version_no, v.message, v.created_at, v.created_by,
+              u.full_name AS created_by_name
+       FROM repository_versions v
+       LEFT JOIN users u ON u.id = v.created_by
+       WHERE v.repository_id = $1
+       ORDER BY v.version_no DESC, v.id DESC`,
+      [req.params.id]
+    );
+
+    const mergeRequests = await q(
+      `SELECT m.id, m.title, m.description, m.source_branch, m.target_branch,
+              m.status, m.created_at, m.updated_at, m.created_by,
+              creator.full_name AS created_by_name,
+              m.reviewed_by, reviewer.full_name AS reviewed_by_name,
+              m.reviewed_at
+       FROM repository_merge_requests m
+       LEFT JOIN users creator ON creator.id = m.created_by
+       LEFT JOIN users reviewer ON reviewer.id = m.reviewed_by
+       WHERE m.repository_id = $1
+       ORDER BY m.created_at DESC, m.id DESC`,
+      [req.params.id]
+    );
+
+    const activity = await q(
+      `SELECT a.id, a.action, a.target_type, a.target_id, a.target_name,
+              a.details, a.created_at, a.created_by, u.full_name AS created_by_name
+       FROM repository_activity a
+       LEFT JOIN users u ON u.id = a.created_by
+       WHERE a.repository_id = $1
+       ORDER BY a.created_at DESC, a.id DESC`,
+      [req.params.id]
+    );
+
+    res.json({
+      repository: access.repo,
+      canManage: access.canManage,
+      files,
+      versions,
+      mergeRequests,
+      activity
+    });
+  } catch (error) {
+    console.error("GET REPOSITORY ERROR:", error);
+    res.status(500).json({ message: "Unable to load repository." });
+  }
+});
+
+router.post("/repos/:id/files", repoUpload.single("file"), async (req, res) => {
+  try {
+    const access = await getRepoAccess(req.params.id, req.user);
+    if (!access.exists) return res.status(404).json({ message: "Repository not found." });
+    if (!access.canManage) return res.status(403).json({ message: "You do not have permission to upload code to this repository." });
+    if (!req.file) return res.status(400).json({ message: "A file is required." });
+
+    const relativePath = String(req.body.path || req.file.originalname || "").trim()
+      .replace(/\\/g, "/")
+      .replace(/^\/+/, "");
+    if (!relativePath || relativePath.includes("..")) {
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ message: "Invalid repository file path." });
+    }
+
+    const versionMessage = String(req.body.message || `Upload ${relativePath}`).trim() || `Upload ${relativePath}`;
+
+    const latest = await q(
+      `SELECT COALESCE(MAX(version_no), 0)::int AS version_no
+       FROM repository_versions WHERE repository_id = $1`,
+      [req.params.id]
+    );
+    const nextVersion = Number(latest[0]?.version_no || 0) + 1;
+
+    const version = await q(
+      `INSERT INTO repository_versions (repository_id, version_no, message, created_by)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [req.params.id, nextVersion, versionMessage, req.user.id]
+    );
+
+    const existing = await q(
+      `SELECT id, storage_name FROM repository_files
+       WHERE repository_id = $1 AND path = $2`,
+      [req.params.id, relativePath]
+    );
+
+    if (existing[0]?.storage_name) {
+      const oldPath = path.join(repoUploadDir, existing[0].storage_name);
+      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+    }
+
+    await q(
+      `INSERT INTO repository_files
+         (repository_id, version_id, path, original_name, storage_name, mime_type, size, uploaded_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (repository_id, path)
+       DO UPDATE SET version_id = EXCLUDED.version_id,
+                     original_name = EXCLUDED.original_name,
+                     storage_name = EXCLUDED.storage_name,
+                     mime_type = EXCLUDED.mime_type,
+                     size = EXCLUDED.size,
+                     uploaded_by = EXCLUDED.uploaded_by,
+                     created_at = NOW()`,
+      [req.params.id, version[0].id, relativePath, req.file.originalname,
+       path.basename(req.file.filename), req.file.mimetype || "application/octet-stream",
+       req.file.size, req.user.id]
+    );
+
+    await q(`UPDATE repositories SET updated_at = NOW(), branch = COALESCE(NULLIF($2, ''), branch) WHERE id = $1`,
+      [req.params.id, String(req.body.branch || "").trim()]);
+
+    await q(
+      `INSERT INTO repository_activity
+        (repository_id, action, target_type, target_id, target_name, details, created_by)
+       VALUES ($1, 'FILE_UPLOADED', 'file', $2, $3, $4, $5)`,
+      [req.params.id, null, relativePath, JSON.stringify({ version_id: version[0].id, version_no: nextVersion, message: versionMessage, size: req.file.size }), req.user.id]
+    );
+
+    res.status(201).json({ message: "File uploaded and version created.", version: version[0] });
+  } catch (error) {
+    console.error("REPOSITORY FILE UPLOAD ERROR:", error);
+    if (req.file?.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    res.status(500).json({ message: "Unable to upload repository file." });
+  }
+});
+
+router.get("/repos/:repoId/files/:fileId/download", async (req, res) => {
+  try {
+    const access = await getRepoAccess(req.params.repoId, req.user);
+    if (!access.exists) return res.status(404).json({ message: "Repository not found." });
+    if (!access.canView) return res.status(403).json({ message: "You do not have access to this repository." });
+
+    const rows = await q(
+      `SELECT original_name, storage_name, mime_type
+       FROM repository_files
+       WHERE id = $1 AND repository_id = $2`,
+      [req.params.fileId, req.params.repoId]
+    );
+    if (!rows[0]) return res.status(404).json({ message: "File not found." });
+
+    const filePath = path.join(repoUploadDir, path.basename(rows[0].storage_name));
+    if (!fs.existsSync(filePath)) return res.status(404).json({ message: "Stored file is missing." });
+
+    res.type(rows[0].mime_type || "application/octet-stream");
+    res.download(filePath, rows[0].original_name);
+  } catch (error) {
+    console.error("REPOSITORY FILE DOWNLOAD ERROR:", error);
+    res.status(500).json({ message: "Unable to download repository file." });
+  }
+});
+
+router.delete("/repos/:repoId/files/:fileId", async (req, res) => {
+  try {
+    const access = await getRepoAccess(req.params.repoId, req.user);
+    if (!access.exists) return res.status(404).json({ message: "Repository not found." });
+    if (!access.canManage) return res.status(403).json({ message: "You do not have permission to delete files from this repository." });
+
+    const rows = await q(
+      `SELECT id, storage_name, path
+       FROM repository_files
+       WHERE id = $1 AND repository_id = $2`,
+      [req.params.fileId, req.params.repoId]
+    );
+
+    if (!rows[0]) return res.status(404).json({ message: "File not found." });
+
+    const storageName = rows[0].storage_name;
+    const filePath = path.join(repoUploadDir, path.basename(storageName));
+
+    await q(
+      `INSERT INTO repository_activity
+        (repository_id, action, target_type, target_id, target_name, details, created_by)
+       VALUES ($1, 'FILE_DELETED', 'file', $2, $3, $4, $5)`,
+      [req.params.repoId, rows[0].id, rows[0].path, JSON.stringify({ storage_name: rows[0].storage_name }), req.user.id]
+    );
+
+    await q(
+      `DELETE FROM repository_files
+       WHERE id = $1 AND repository_id = $2`,
+      [req.params.fileId, req.params.repoId]
+    );
+
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+
+    await q(`UPDATE repositories SET updated_at = NOW() WHERE id = $1`, [req.params.repoId]);
+
+    res.json({ message: "Repository file deleted.", id: rows[0].id });
+  } catch (error) {
+    console.error("REPOSITORY FILE DELETE ERROR:", error);
+    res.status(500).json({ message: "Unable to delete repository file." });
+  }
+});
+
+router.post("/repos/:id/merge-requests", async (req, res) => {
+  try {
+    const access = await getRepoAccess(req.params.id, req.user);
+    if (!access.exists) return res.status(404).json({ message: "Repository not found." });
+    if (!access.canView) return res.status(403).json({ message: "You do not have access to this repository." });
+
+    const title = String(req.body.title || "").trim();
+    const description = String(req.body.description || "").trim();
+    const sourceBranch = String(req.body.source_branch || "").trim();
+    const targetBranch = String(req.body.target_branch || access.repo.branch || "main").trim();
+
+    if (!title || !sourceBranch || !targetBranch) {
+      return res.status(400).json({ message: "Title, source branch, and target branch are required." });
+    }
+
+    const rows = await q(
+      `INSERT INTO repository_merge_requests
+         (repository_id, title, description, source_branch, target_branch, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [req.params.id, title, description, sourceBranch, targetBranch, req.user.id]
+    );
+
+    await q(
+      `INSERT INTO repository_activity
+        (repository_id, action, target_type, target_id, target_name, details, created_by)
+       VALUES ($1, 'MERGE_REQUEST_CREATED', 'merge_request', $2, $3, $4, $5)`,
+      [req.params.id, rows[0].id, title, JSON.stringify({ source_branch: sourceBranch, target_branch: targetBranch }), req.user.id]
+    );
+
+    res.status(201).json(rows[0]);
+  } catch (error) {
+    console.error("CREATE MERGE REQUEST ERROR:", error);
+    res.status(500).json({ message: "Unable to create merge request." });
+  }
+});
+
+router.patch("/repos/:repoId/merge-requests/:id", async (req, res) => {
+  try {
+    const access = await getRepoAccess(req.params.repoId, req.user);
+    if (!access.exists) return res.status(404).json({ message: "Repository not found." });
+    if (!access.canManage) return res.status(403).json({ message: "You do not have permission to review merge requests." });
+
+    const status = String(req.body.status || "").trim().toUpperCase();
+    if (!["APPROVED", "REJECTED", "MERGED"].includes(status)) {
+      return res.status(400).json({ message: "Status must be APPROVED, REJECTED, or MERGED." });
+    }
+
+    const rows = await q(
+      `UPDATE repository_merge_requests
+       SET status = $1, reviewed_by = $2, reviewed_at = NOW(), updated_at = NOW()
+       WHERE id = $3 AND repository_id = $4
+       RETURNING *`,
+      [status, req.user.id, req.params.id, req.params.repoId]
+    );
+    if (!rows[0]) return res.status(404).json({ message: "Merge request not found." });
+
+    await q(
+      `INSERT INTO repository_activity
+        (repository_id, action, target_type, target_id, target_name, details, created_by)
+       VALUES ($1, 'MERGE_REQUEST_STATUS_CHANGED', 'merge_request', $2, $3, $4, $5)`,
+      [req.params.repoId, rows[0].id, rows[0].title, JSON.stringify({ status }), req.user.id]
+    );
+
+    res.json(rows[0]);
+  } catch (error) {
+    console.error("UPDATE MERGE REQUEST ERROR:", error);
+    res.status(500).json({ message: "Unable to update merge request." });
+  }
+});
+
+router.get("/repos/:id/versions/:versionId", async (req, res) => {
+  try {
+    const access = await getRepoAccess(req.params.id, req.user);
+    if (!access.exists) return res.status(404).json({ message: "Repository not found." });
+    if (!access.canView) return res.status(403).json({ message: "You do not have access to this repository." });
+
+    const rows = await q(
+      `SELECT v.*, u.full_name AS created_by_name
+       FROM repository_versions v
+       LEFT JOIN users u ON u.id = v.created_by
+       WHERE v.id = $1 AND v.repository_id = $2`,
+      [req.params.versionId, req.params.id]
+    );
+    if (!rows[0]) return res.status(404).json({ message: "Version not found." });
+
+    const files = await q(
+      `SELECT f.id, f.path, f.original_name, f.mime_type, f.size, f.created_at,
+              f.uploaded_by, u.full_name AS uploaded_by_name
+       FROM repository_files f
+       LEFT JOIN users u ON u.id = f.uploaded_by
+       WHERE repository_id = $1 AND version_id = $2
+       ORDER BY path`,
+      [req.params.id, req.params.versionId]
+    );
+
+    res.json({ version: rows[0], files });
+  } catch (error) {
+    console.error("GET REPOSITORY VERSION ERROR:", error);
+    res.status(500).json({ message: "Unable to load repository version." });
+  }
 });
 
 /* ==================== CHAT ==================== */
@@ -2375,8 +3134,8 @@ async function ensureDirectConversation(userA, userB) {
 
   const rows = await q(
     `INSERT INTO chat_conversations
-       (conversation_type, user_one_id, user_two_id)
-     VALUES ('direct', $1, $2)
+       (conversation_type, user_one_id, user_two_id, created_by)
+     VALUES ('direct', $1, $2, $1)
      ON CONFLICT (conversation_type, user_one_id, user_two_id)
      DO UPDATE SET conversation_type = EXCLUDED.conversation_type
      RETURNING id`,
@@ -2387,13 +3146,17 @@ async function ensureDirectConversation(userA, userB) {
 }
 
 async function canAccessConversation(conversationId, user) {
-  if (isManagement(user)) return true;
+  if (["CEO", "ADMIN", "HR"].includes(roleOf(user))) return true;
 
   const rows = await q(
-    `SELECT id
-     FROM chat_conversations
-     WHERE id = $1
-       AND (user_one_id = $2 OR user_two_id = $2)`,
+    `SELECT c.id
+     FROM chat_conversations c
+     LEFT JOIN chat_members cm ON cm.conversation_id = c.id AND cm.user_id = $2
+     WHERE c.id = $1
+       AND (
+         (c.conversation_type = 'direct' AND (c.user_one_id = $2 OR c.user_two_id = $2))
+         OR (c.conversation_type = 'group' AND cm.user_id IS NOT NULL)
+       )`,
     [conversationId, user.id]
   );
 
@@ -2414,15 +3177,34 @@ router.get("/chat/users", async (req, res) => {
 });
 
 router.get("/chat/conversations", async (req, res) => {
-  const rows = await q(
+  try {
+    const rows = await q(
     `SELECT
        c.id,
        c.conversation_type,
-       CASE WHEN c.user_one_id = $1 THEN c.user_two_id ELSE c.user_one_id END AS other_user_id,
-       u.full_name AS other_user_name,
-       u.employee_id AS other_employee_id,
-       u.role AS other_user_role,
-       u.employee_level AS other_employee_level,
+       c.name AS group_name,
+       c.created_by,
+       CASE
+         WHEN c.conversation_type = 'direct'
+           THEN CASE WHEN c.user_one_id = $1 THEN c.user_two_id ELSE c.user_one_id END
+         ELSE NULL
+       END AS other_user_id,
+       CASE
+         WHEN c.conversation_type = 'direct' THEN u.full_name
+         ELSE c.name
+       END AS other_user_name,
+       CASE
+         WHEN c.conversation_type = 'direct' THEN u.employee_id
+         ELSE NULL
+       END AS other_employee_id,
+       CASE
+         WHEN c.conversation_type = 'direct' THEN u.role
+         ELSE 'GROUP'
+       END AS other_user_role,
+       CASE
+         WHEN c.conversation_type = 'direct' THEN u.employee_level
+         ELSE NULL
+       END AS other_employee_level,
        lm.id AS last_message_id,
        lm.body AS last_message_body,
        lm.created_at AS last_message_at,
@@ -2431,13 +3213,28 @@ router.get("/chat/conversations", async (req, res) => {
          SELECT COUNT(*)::int
          FROM chat_messages um
          WHERE um.conversation_id = c.id
-           AND um.receiver_id = $1
-           AND um.read_at IS NULL
            AND um.deleted_at IS NULL
-       ), 0) AS unread_count
+           AND (
+             (c.conversation_type = 'direct' AND um.receiver_id = $1 AND um.read_at IS NULL)
+             OR
+             (c.conversation_type = 'group'
+              AND um.sender_id <> $1
+              AND NOT EXISTS (
+                SELECT 1 FROM chat_group_message_reads gr
+                WHERE gr.message_id = um.id AND gr.user_id = $1
+              ))
+           )
+       ), 0) AS unread_count,
+       CASE
+         WHEN c.conversation_type = 'group' THEN (
+           SELECT COUNT(*)::int FROM chat_members gm WHERE gm.conversation_id = c.id
+         )
+         ELSE 2
+       END AS member_count
      FROM chat_conversations c
-     JOIN users u
-       ON u.id = CASE WHEN c.user_one_id = $1 THEN c.user_two_id ELSE c.user_one_id END
+     LEFT JOIN users u
+       ON c.conversation_type = 'direct'
+      AND u.id = CASE WHEN c.user_one_id = $1 THEN c.user_two_id ELSE c.user_one_id END
      LEFT JOIN LATERAL (
        SELECT id, body, created_at, sender_id
        FROM chat_messages
@@ -2446,13 +3243,24 @@ router.get("/chat/conversations", async (req, res) => {
        ORDER BY created_at DESC, id DESC
        LIMIT 1
      ) lm ON TRUE
-     WHERE c.conversation_type = 'direct'
-       AND (c.user_one_id = $1 OR c.user_two_id = $1)
+     WHERE
+       (c.conversation_type = 'direct' AND (c.user_one_id = $1 OR c.user_two_id = $1))
+       OR
+       (c.conversation_type = 'group' AND EXISTS (
+         SELECT 1 FROM chat_members cm
+         WHERE cm.conversation_id = c.id AND cm.user_id = $1
+       ))
      ORDER BY lm.created_at DESC NULLS LAST, c.id DESC`,
     [req.user.id]
-  );
+    );
 
-  res.json(rows);
+    res.json(rows);
+  } catch (error) {
+    console.error("CHAT CONVERSATIONS LOAD ERROR:", error);
+    res.status(500).json({
+      message: "Unable to load conversations. Run the database initializer and restart the backend."
+    });
+  }
 });
 
 router.post("/chat/conversations", async (req, res) => {
@@ -2482,8 +3290,228 @@ router.post("/chat/conversations", async (req, res) => {
     other_user_name: target[0].full_name,
     other_employee_id: target[0].employee_id,
     other_user_role: target[0].role,
-    other_employee_level: target[0].employee_level
+    other_employee_level: target[0].employee_level,
+    member_count: 2
   });
+});
+
+router.post("/chat/groups", requirePermission("chat.create_group"), async (req, res) => {
+  const name = String(req.body.name || "").trim();
+  const rawMembers = Array.isArray(req.body.member_ids) ? req.body.member_ids : [];
+  const memberIds = [...new Set(rawMembers.map(Number).filter(Number.isInteger))];
+
+  if (!name) return res.status(400).json({ message: "Group name is required." });
+  if (name.length > 100) return res.status(400).json({ message: "Group name is too long." });
+  if (memberIds.length < 1) return res.status(400).json({ message: "Select at least one other employee." });
+  if (memberIds.length > 50) return res.status(400).json({ message: "A group can have at most 50 members." });
+
+  memberIds.push(Number(req.user.id));
+  const uniqueMembers = [...new Set(memberIds)];
+
+  const activeUsers = await q(
+    `SELECT id, full_name, employee_id, role, employee_level
+     FROM users
+     WHERE id = ANY($1::int[])
+       AND UPPER(COALESCE(employment_status, 'ACTIVE')) = 'ACTIVE'`,
+    [uniqueMembers]
+  );
+
+  if (activeUsers.length !== uniqueMembers.length) {
+    return res.status(400).json({ message: "One or more selected employees are unavailable." });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const conversationResult = await client.query(
+      `INSERT INTO chat_conversations
+         (conversation_type, name, created_by)
+       VALUES ('group', $1, $2)
+       RETURNING id, conversation_type, name, created_by, created_at`,
+      [name, req.user.id]
+    );
+
+    const conversation = conversationResult.rows[0];
+
+    for (const userId of uniqueMembers) {
+      await client.query(
+        `INSERT INTO chat_members (conversation_id, user_id, is_admin)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (conversation_id, user_id) DO NOTHING`,
+        [conversation.id, userId, Number(userId) === Number(req.user.id)]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    const io = req.app.locals.io;
+    if (io) {
+      for (const userId of uniqueMembers) {
+        io.to(`chat:user:${userId}`).emit("chat:conversation-created", {
+          id: conversation.id,
+          conversation_type: "group",
+          group_name: conversation.name,
+          other_user_name: conversation.name,
+          member_count: uniqueMembers.length
+        });
+      }
+    }
+
+    res.status(201).json({
+      ...conversation,
+      other_user_name: conversation.name,
+      member_count: uniqueMembers.length
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("GROUP CREATE ERROR:", error);
+    res.status(500).json({ message: "Unable to create group." });
+  } finally {
+    client.release();
+  }
+});
+
+router.get("/chat/groups/:id/members", async (req, res) => {
+  const conversationId = Number(req.params.id);
+  if (!Number.isInteger(conversationId)) {
+    return res.status(400).json({ message: "Invalid group ID." });
+  }
+
+  const conversation = await q(
+    `SELECT id, name, created_by, conversation_type
+     FROM chat_conversations
+     WHERE id = $1 AND conversation_type = 'group'`,
+    [conversationId]
+  );
+
+  if (!conversation[0]) return res.status(404).json({ message: "Group not found." });
+  if (!(await canAccessConversation(conversationId, req.user))) {
+    return res.status(403).json({ message: "You cannot access this group." });
+  }
+
+  const members = await q(
+    `SELECT u.id, u.employee_id, u.full_name, u.email, u.role, u.employee_level,
+            cm.is_admin, cm.joined_at
+     FROM chat_members cm
+     JOIN users u ON u.id = cm.user_id
+     WHERE cm.conversation_id = $1
+     ORDER BY cm.is_admin DESC, u.full_name ASC`,
+    [conversationId]
+  );
+
+  res.json({ group: conversation[0], members });
+});
+
+router.post("/chat/groups/:id/members", requirePermission("chat.manage_group"), async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const userId = Number(req.body.user_id);
+
+  if (!Number.isInteger(conversationId) || !Number.isInteger(userId)) {
+    return res.status(400).json({ message: "Invalid group or employee." });
+  }
+
+  const group = await q(
+    `SELECT id, name, created_by
+     FROM chat_conversations
+     WHERE id = $1 AND conversation_type = 'group'`,
+    [conversationId]
+  );
+
+  if (!group[0]) return res.status(404).json({ message: "Group not found." });
+
+  const management = ["CEO", "ADMIN", "HR"].includes(roleOf(req.user));
+  const creator = Number(group[0].created_by) === Number(req.user.id);
+  const membership = await q(
+    `SELECT is_admin FROM chat_members WHERE conversation_id = $1 AND user_id = $2`,
+    [conversationId, req.user.id]
+  );
+
+  if (!management && !(creator || membership[0]?.is_admin)) {
+    return res.status(403).json({ message: "Only group admins or management can add members." });
+  }
+
+  const target = await q(
+    `SELECT id, full_name, employee_id, role, employee_level
+     FROM users
+     WHERE id = $1
+       AND UPPER(COALESCE(employment_status, 'ACTIVE')) = 'ACTIVE'`,
+    [userId]
+  );
+
+  if (!target[0]) return res.status(404).json({ message: "Employee not found or inactive." });
+
+  const existing = await q(
+    `SELECT 1 FROM chat_members WHERE conversation_id = $1 AND user_id = $2`,
+    [conversationId, userId]
+  );
+  if (existing.length) return res.status(409).json({ message: "Employee is already a group member." });
+
+  const count = await q(`SELECT COUNT(*)::int AS count FROM chat_members WHERE conversation_id = $1`, [conversationId]);
+  if (Number(count[0]?.count || 0) >= 50) {
+    return res.status(400).json({ message: "A group can have at most 50 members." });
+  }
+
+  await q(
+    `INSERT INTO chat_members (conversation_id, user_id, is_admin)
+     VALUES ($1, $2, FALSE)`,
+    [conversationId, userId]
+  );
+
+  const io = req.app.locals.io;
+  if (io) io.to(`chat:user:${userId}`).emit("chat:conversation-created", {
+    id: conversationId,
+    conversation_type: "group",
+    group_name: group[0].name,
+    other_user_name: group[0].name
+  });
+
+  res.status(201).json({ ok: true, member: target[0] });
+});
+
+router.delete("/chat/groups/:id/members/:userId", requirePermission("chat.manage_group"), async (req, res) => {
+  const conversationId = Number(req.params.id);
+  const userId = Number(req.params.userId);
+
+  if (!Number.isInteger(conversationId) || !Number.isInteger(userId)) {
+    return res.status(400).json({ message: "Invalid group or employee." });
+  }
+
+  const group = await q(
+    `SELECT id, name, created_by
+     FROM chat_conversations
+     WHERE id = $1 AND conversation_type = 'group'`,
+    [conversationId]
+  );
+  if (!group[0]) return res.status(404).json({ message: "Group not found." });
+
+  const management = ["CEO", "ADMIN", "HR"].includes(roleOf(req.user));
+  const creator = Number(group[0].created_by) === Number(req.user.id);
+  const membership = await q(
+    `SELECT is_admin FROM chat_members WHERE conversation_id = $1 AND user_id = $2`,
+    [conversationId, req.user.id]
+  );
+
+  if (!management && !(creator || membership[0]?.is_admin)) {
+    return res.status(403).json({ message: "Only group admins or management can remove members." });
+  }
+
+  if (userId === Number(group[0].created_by)) {
+    return res.status(400).json({ message: "The group creator cannot be removed." });
+  }
+
+  await q(
+    `DELETE FROM chat_members WHERE conversation_id = $1 AND user_id = $2`,
+    [conversationId, userId]
+  );
+
+  const io = req.app.locals.io;
+  if (io) {
+    io.to(`chat:user:${userId}`).emit("chat:member-removed", { conversation_id: conversationId });
+    io.in(`chat:user:${userId}`).socketsLeave(`chat:conversation:${conversationId}`);
+  }
+
+  res.json({ ok: true });
 });
 
 router.get("/chat/conversations/:id/messages", async (req, res) => {
@@ -2496,9 +3524,13 @@ router.get("/chat/conversations/:id/messages", async (req, res) => {
     return res.status(403).json({ message: "You cannot access this conversation." });
   }
 
-  // Only a participant's unread messages are marked read. Management monitoring
-  // does not silently mark an employee's messages as read.
-  if (!isManagement(req.user)) {
+  const conversation = await q(
+    `SELECT id, conversation_type FROM chat_conversations WHERE id = $1`,
+    [conversationId]
+  );
+  if (!conversation[0]) return res.status(404).json({ message: "Conversation not found." });
+
+  if (conversation[0].conversation_type === "direct") {
     await q(
       `UPDATE chat_messages
        SET read_at = COALESCE(read_at, NOW())
@@ -2506,6 +3538,17 @@ router.get("/chat/conversations/:id/messages", async (req, res) => {
          AND receiver_id = $2
          AND read_at IS NULL
          AND deleted_at IS NULL`,
+      [conversationId, req.user.id]
+    );
+  } else if (!isManagement(req.user)) {
+    await q(
+      `INSERT INTO chat_group_message_reads (message_id, user_id)
+       SELECT cm.id, $2
+       FROM chat_messages cm
+       WHERE cm.conversation_id = $1
+         AND cm.sender_id <> $2
+         AND cm.deleted_at IS NULL
+       ON CONFLICT (message_id, user_id) DO NOTHING`,
       [conversationId, req.user.id]
     );
   }
@@ -2518,6 +3561,10 @@ router.get("/chat/conversations/:id/messages", async (req, res) => {
        c.receiver_id,
        c.body,
        c.message_type,
+       c.attachment_url,
+       c.attachment_name,
+       c.attachment_mime,
+       c.attachment_size,
        c.created_at,
        c.read_at,
        c.deleted_at,
@@ -2535,52 +3582,119 @@ router.get("/chat/conversations/:id/messages", async (req, res) => {
   res.json(rows);
 });
 
+
+/* Upload an attachment for a Chat message. The returned URL is then stored
+   with the message so the message itself remains immutable after sending. */
+router.post("/chat/uploads", chatUpload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: "A file is required." });
+
+    const mime = String(req.file.mimetype || "").toLowerCase();
+    const isVoice = mime.startsWith("audio/");
+    const allowedGeneral = [
+      "image/", "text/", "application/pdf", "application/zip", "application/x-zip-compressed",
+      "application/msword", "application/vnd.openxmlformats-officedocument",
+      "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml",
+      "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml"
+    ];
+    const isAllowed = isVoice || allowedGeneral.some((prefix) => mime.startsWith(prefix));
+    if (!isAllowed) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ message: "This file type is not supported in Chat." });
+    }
+
+    res.status(201).json({
+      url: `/uploads/chat/${req.file.filename}`,
+      name: req.file.originalname,
+      mime,
+      size: req.file.size,
+      kind: isVoice ? "voice" : "file"
+    });
+  } catch (error) {
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
+    console.error("CHAT UPLOAD ERROR:", error);
+    res.status(500).json({ message: "Unable to upload Chat attachment." });
+  }
+});
+
 router.post("/chat/conversations/:id/messages", async (req, res) => {
   const conversationId = Number(req.params.id);
-  const body = String(req.body.body || "").trim();
+  const rawBody = req.body?.body;
+  const body = typeof rawBody === "string" ? rawBody.trim() : "";
+  const requestedType = String(req.body?.message_type || "text").trim().toLowerCase();
+  const messageType = ["text", "file", "code", "voice"].includes(requestedType) ? requestedType : null;
 
-  if (!Number.isInteger(conversationId) || !body) {
-    return res.status(400).json({ message: "Conversation and message are required." });
+  const attachmentUrl = String(req.body?.attachment_url || "").trim();
+  const attachmentName = String(req.body?.attachment_name || "").trim();
+  const attachmentMime = String(req.body?.attachment_mime || "").trim();
+  const attachmentSize = Number(req.body?.attachment_size || 0);
+
+  if (!Number.isInteger(conversationId) || !messageType) {
+    return res.status(400).json({ message: "Conversation and valid message type are required." });
   }
 
-  if (body.length > 5000) {
-    return res.status(400).json({ message: "Message is too long (maximum 5000 characters)." });
+  if (messageType === "text" || messageType === "code") {
+    if (!body) return res.status(400).json({ message: "Message is required." });
+    if (body.length > 5000) {
+      return res.status(400).json({ message: "Message is too long (maximum 5000 characters)." });
+    }
+  } else {
+    if (!attachmentUrl || !attachmentName) {
+      return res.status(400).json({ message: "An uploaded attachment is required." });
+    }
+    if (attachmentSize > 25 * 1024 * 1024) {
+      return res.status(400).json({ message: "Attachment is too large (maximum 25 MB)." });
+    }
+  }
+
+  if (!(await canAccessConversation(conversationId, req.user))) {
+    return res.status(403).json({ message: "You cannot send messages in this conversation." });
   }
 
   const conversation = await q(
-    `SELECT id, user_one_id, user_two_id
+    `SELECT id, conversation_type, user_one_id, user_two_id, name
      FROM chat_conversations
-     WHERE id = $1 AND conversation_type = 'direct'`,
+     WHERE id = $1`,
     [conversationId]
   );
-
-  if (!conversation[0]) {
-    return res.status(404).json({ message: "Conversation not found." });
-  }
+  if (!conversation[0]) return res.status(404).json({ message: "Conversation not found." });
 
   const c = conversation[0];
-  const recipientId = Number(c.user_one_id) === Number(req.user.id)
-    ? c.user_two_id
-    : Number(c.user_two_id) === Number(req.user.id)
-      ? c.user_one_id
-      : null;
+  let recipientId = null;
 
-  if (!recipientId) {
-    return res.status(403).json({ message: "You cannot send messages in this conversation." });
+  if (c.conversation_type === "direct") {
+    recipientId = Number(c.user_one_id) === Number(req.user.id) ? c.user_two_id :
+      Number(c.user_two_id) === Number(req.user.id) ? c.user_one_id : null;
+    if (!recipientId) return res.status(403).json({ message: "You cannot send messages in this conversation." });
   }
 
   const rows = await q(
     `INSERT INTO chat_messages
-       (conversation_id, sender_id, receiver_id, body, message_type)
-     VALUES ($1, $2, $3, $4, 'text')
-     RETURNING id, conversation_id, sender_id, receiver_id, body, message_type, created_at, read_at, deleted_at`,
-    [conversationId, req.user.id, recipientId, body]
+       (conversation_id, sender_id, receiver_id, body, message_type,
+        attachment_url, attachment_name, attachment_mime, attachment_size)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id, conversation_id, sender_id, receiver_id, body, message_type,
+               attachment_url, attachment_name, attachment_mime, attachment_size,
+               created_at, read_at, deleted_at`,
+    [
+      conversationId,
+      req.user.id,
+      recipientId,
+      body || null,
+      messageType,
+      attachmentUrl || null,
+      attachmentName || null,
+      attachmentMime || null,
+      Number.isFinite(attachmentSize) && attachmentSize > 0 ? attachmentSize : null
+    ]
   );
 
   const message = {
     ...rows[0],
     sender_name: req.user.full_name,
-    receiver_name: (await q(`SELECT full_name FROM users WHERE id = $1`, [recipientId]))[0]?.full_name || ""
+    receiver_name: recipientId
+      ? (await q(`SELECT full_name FROM users WHERE id = $1`, [recipientId]))[0]?.full_name || ""
+      : "",
   };
 
   const io = req.app.locals.io;
@@ -2595,15 +3709,34 @@ router.post("/chat/conversations/:id/read", async (req, res) => {
     return res.status(403).json({ message: "You cannot access this conversation." });
   }
 
-  await q(
-    `UPDATE chat_messages
-     SET read_at = COALESCE(read_at, NOW())
-     WHERE conversation_id = $1
-       AND receiver_id = $2
-       AND read_at IS NULL
-       AND deleted_at IS NULL`,
-    [conversationId, req.user.id]
+  const conversation = await q(
+    `SELECT conversation_type FROM chat_conversations WHERE id = $1`,
+    [conversationId]
   );
+  if (!conversation[0]) return res.status(404).json({ message: "Conversation not found." });
+
+  if (conversation[0].conversation_type === "direct") {
+    await q(
+      `UPDATE chat_messages
+       SET read_at = COALESCE(read_at, NOW())
+       WHERE conversation_id = $1
+         AND receiver_id = $2
+         AND read_at IS NULL
+         AND deleted_at IS NULL`,
+      [conversationId, req.user.id]
+    );
+  } else if (!isManagement(req.user)) {
+    await q(
+      `INSERT INTO chat_group_message_reads (message_id, user_id)
+       SELECT cm.id, $2
+       FROM chat_messages cm
+       WHERE cm.conversation_id = $1
+         AND cm.sender_id <> $2
+         AND cm.deleted_at IS NULL
+       ON CONFLICT (message_id, user_id) DO NOTHING`,
+      [conversationId, req.user.id]
+    );
+  }
 
   const io = req.app.locals.io;
   if (io) io.to(`chat:conversation:${conversationId}`).emit("chat:read", {
@@ -2616,9 +3749,7 @@ router.post("/chat/conversations/:id/read", async (req, res) => {
 
 router.delete("/chat/messages/:id", async (req, res) => {
   if (!canDeleteChatMessage(req.user)) {
-    return res.status(403).json({
-      message: "Only Admin and CEO can delete chat messages."
-    });
+    return res.status(403).json({ message: "Only Admin and CEO can delete chat messages." });
   }
 
   const messageId = Number(req.params.id);
@@ -2643,7 +3774,6 @@ router.delete("/chat/messages/:id", async (req, res) => {
       await client.query("ROLLBACK");
       return res.status(404).json({ message: "Message not found." });
     }
-
     if (message.deleted_at) {
       await client.query("ROLLBACK");
       return res.status(409).json({ message: "Message has already been deleted." });
@@ -2682,8 +3812,140 @@ router.delete("/chat/messages/:id", async (req, res) => {
   }
 });
 
-/* Backward-compatible management history endpoint. Normal users receive only
-   their own messages; Admin/HR/CEO can monitor all visible chat history. */
+
+/* ==================== CHAT MONITORING ==================== */
+
+router.get("/chat/monitoring", requirePermission("message_monitoring.view"), async (req, res) => {
+  try {
+    const conditions = [];
+    const params = [];
+    const addParam = (value) => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+
+    const search = String(req.query.search || "").trim();
+    const employeeId = Number(req.query.employee_id);
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
+    const includeDeleted = String(req.query.include_deleted || "true").toLowerCase() !== "false";
+
+    if (search) {
+      const p = addParam(`%${search}%`);
+      conditions.push(`(
+        c.body ILIKE ${p}
+        OR s.full_name ILIKE ${p}
+        OR s.employee_id ILIKE ${p}
+        OR r.full_name ILIKE ${p}
+        OR r.employee_id ILIKE ${p}
+        OR cc.name ILIKE ${p}
+      )`);
+    }
+
+    if (Number.isInteger(employeeId) && employeeId > 0) {
+      const p = addParam(employeeId);
+      conditions.push(`(c.sender_id = ${p} OR c.receiver_id = ${p})`);
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      const p = addParam(from);
+      conditions.push(`c.created_at >= ${p}::date`);
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      const p = addParam(to);
+      conditions.push(`c.created_at < (${p}::date + INTERVAL '1 day')`);
+    }
+
+    if (!includeDeleted) {
+      conditions.push(`c.deleted_at IS NULL`);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const countRows = await q(
+      `SELECT
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE c.deleted_at IS NULL)::int AS active,
+         COUNT(*) FILTER (WHERE c.deleted_at IS NOT NULL)::int AS deleted
+       FROM chat_messages c
+       LEFT JOIN users s ON s.id = c.sender_id
+       LEFT JOIN users r ON r.id = c.receiver_id
+       LEFT JOIN chat_conversations cc ON cc.id = c.conversation_id
+       ${where}`,
+      params
+    );
+
+    const total = Number(countRows[0]?.total || 0);
+    const active = Number(countRows[0]?.active || 0);
+    const deleted = Number(countRows[0]?.deleted || 0);
+
+    const pageRaw = Number(req.query.page);
+    const limitRaw = Number(req.query.limit);
+    const pageSize = Number.isInteger(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 50;
+    const page = Number.isInteger(pageRaw) ? Math.max(pageRaw, 1) : 1;
+    const offset = (page - 1) * pageSize;
+    const limitParam = addParam(pageSize);
+    const offsetParam = addParam(offset);
+
+    const rows = await q(
+      `SELECT
+         c.id, c.conversation_id, c.sender_id, c.receiver_id, c.body,
+         c.message_type, c.created_at, c.read_at, c.deleted_at, c.deleted_by,
+         s.full_name AS sender_name, s.employee_id AS sender_employee_id, s.role AS sender_role,
+         r.full_name AS receiver_name, r.employee_id AS receiver_employee_id, r.role AS receiver_role,
+         cc.conversation_type, cc.name AS group_name,
+         CASE
+           WHEN cc.conversation_type = 'group' THEN cc.name
+           WHEN s.full_name IS NOT NULL AND r.full_name IS NOT NULL THEN s.full_name || ' ↔ ' || r.full_name
+           ELSE 'Direct chat'
+         END AS conversation_name,
+         db.full_name AS deleted_by_name,
+         CASE
+           WHEN cc.conversation_type = 'group' THEN (
+             SELECT COUNT(*)::int
+             FROM chat_members gm
+             WHERE gm.conversation_id = c.conversation_id
+               AND gm.user_id <> c.sender_id
+           )
+           ELSE 0
+         END AS group_recipient_count,
+         CASE
+           WHEN cc.conversation_type = 'group' THEN (
+             SELECT COUNT(*)::int
+             FROM chat_group_message_reads gr
+             WHERE gr.message_id = c.id
+               AND gr.user_id <> c.sender_id
+           )
+           ELSE 0
+         END AS group_read_count
+       FROM chat_messages c
+       LEFT JOIN users s ON s.id = c.sender_id
+       LEFT JOIN users r ON r.id = c.receiver_id
+       LEFT JOIN chat_conversations cc ON cc.id = c.conversation_id
+       LEFT JOIN users db ON db.id = c.deleted_by
+       ${where}
+       ORDER BY c.created_at DESC, c.id DESC
+       LIMIT ${limitParam} OFFSET ${offsetParam}`,
+      params
+    );
+
+    res.json({
+      rows,
+      pagination: {
+        page,
+        page_size: pageSize,
+        total,
+        total_pages: Math.max(1, Math.ceil(total / pageSize)),
+      },
+      stats: { total, active, deleted },
+    });
+  } catch (error) {
+    console.error("CHAT MONITORING ERROR:", error);
+    res.status(500).json({ message: "Unable to load message monitoring." });
+  }
+});
+
+/* Backward-compatible management history endpoint. */
 router.get("/chat", async (req, res) => {
   const rows = isManagement(req.user)
     ? await q(
@@ -2708,8 +3970,6 @@ router.get("/chat", async (req, res) => {
   res.json(rows);
 });
 
-/* Legacy direct-send endpoint retained for compatibility. New Chat UI uses
-   conversation-scoped POST /chat/conversations/:id/messages. */
 router.post("/chat", async (req, res) => {
   const receiverId = Number(req.body.receiver_id);
   const body = String(req.body.body || "").trim();
@@ -2717,7 +3977,6 @@ router.post("/chat", async (req, res) => {
   if (!receiverId || !body) {
     return res.status(400).json({ message: "Receiver and message are required" });
   }
-
   if (receiverId === Number(req.user.id)) {
     return res.status(400).json({ message: "You cannot message yourself." });
   }
@@ -2745,7 +4004,8 @@ router.post("/chat", async (req, res) => {
 /* ==================== LOGIN LOGS ==================== */
 
 router.get("/logs", async (req, res) => {
-  const rows = isManagement(req.user)
+  const canMonitor = await hasPermission(req.user.id, "message_monitoring.view");
+  const rows = canMonitor
     ? await q(
         `SELECT l.*, u.full_name, u.employee_id
          FROM login_logs l
@@ -2763,106 +4023,109 @@ router.get("/logs", async (req, res) => {
   res.json(rows);
 });
 
-/* ==================== SALARY APPROVAL ====================
-   Employee/Intern salary: HR or Admin may review/finalize.
-   HR/Admin salary: CEO has final approval authority.
-   CEO salary: not generated by the monthly payroll job. */
-router.put("/salary/:id/approval", auth, async (req, res) => {
-  try {
-    const salaryId = Number(req.params.id);
-    if (!Number.isInteger(salaryId)) {
-      return res.status(400).json({ message: "Invalid salary ID" });
-    }
-
-    const { action = "approve" } = req.body || {};
-    const current = await q(
-      `SELECT s.*, u.role AS employee_role, u.full_name
-       FROM salary_records s
-       JOIN users u ON u.id = s.user_id
-       WHERE s.id = $1`,
-      [salaryId]
-    );
-
-    if (!current[0]) {
-      return res.status(404).json({ message: "Salary record not found" });
-    }
-
-    const salary = current[0];
-    const actor = String(req.user.role || "").toUpperCase();
-    const targetRole = String(salary.employee_role || "").toUpperCase();
-    const managementSalary = ["ADMIN", "HR"].includes(targetRole);
-
-    if (action === "review") {
-      if (managementSalary) {
-        return res.status(403).json({ message: "HR/Admin salary requires CEO approval" });
-      }
-      if (!["HR", "ADMIN", "CEO"].includes(actor)) {
-        return res.status(403).json({ message: "Only HR/Admin/CEO can review employee salary" });
-      }
-      const rows = await q(
-        `UPDATE salary_records
-         SET status = 'Reviewed', reviewed_by = $1, reviewed_at = NOW()
-         WHERE id = $2 AND status IN ('Pending Review', 'Reviewed')
-         RETURNING *`,
-        [req.user.id, salaryId]
-      );
-      if (!rows[0]) return res.status(409).json({ message: "Salary cannot be reviewed in its current state" });
-      return res.json({ ...rows[0], message: "Salary marked as reviewed." });
-    }
-
-    if (action === "send_back") {
-      if (managementSalary && actor !== "CEO") {
-        return res.status(403).json({ message: "Only CEO can send back Admin/HR salary" });
-      }
-      if (!managementSalary && !["HR", "ADMIN", "CEO"].includes(actor)) {
-        return res.status(403).json({ message: "Only HR/Admin/CEO can send salary back" });
-      }
-      const rows = await q(
-        `UPDATE salary_records
-         SET status = 'Pending Review', reviewed_by = NULL, reviewed_at = NULL,
-             processed_by = NULL, processed_at = NULL
-         WHERE id = $1
-         RETURNING *`,
-        [salaryId]
-      );
-      return res.json({ ...rows[0], message: "Salary sent back for review." });
-    }
-
-    if (managementSalary) {
-      if (actor !== "CEO") {
-        return res.status(403).json({ message: "CEO approval is required for Admin/HR salary" });
-      }
-    } else if (!["HR", "ADMIN", "CEO"].includes(actor)) {
-      return res.status(403).json({ message: "Only HR/Admin/CEO can approve employee salary" });
-    }
-
-    const rows = await q(
-      `UPDATE salary_records
-       SET status = 'Processed',
-           reviewed_by = COALESCE(reviewed_by, $1),
-           reviewed_at = COALESCE(reviewed_at, NOW()),
-           approved_by = $1,
-           approved_at = NOW(),
-           processed_by = $1,
-           processed_at = NOW()
-       WHERE id = $2 AND status IN ('Pending Review', 'Reviewed')
-       RETURNING *`,
-      [req.user.id, salaryId]
-    );
-    if (!rows[0]) return res.status(409).json({ message: "Salary is already processed or unavailable" });
-
-    // Notify the salary recipient.
-    await q(
-      `INSERT INTO notifications (user_id, title, body)
-       VALUES ($1, $2, $3)`,
-      [salary.user_id, "Salary Processed", `Your ${salary.month} salary has been processed.`]
-    );
-
-    return res.json({ ...rows[0], message: "Salary processed successfully." });
-  } catch (error) {
-    console.error("SALARY APPROVAL ERROR:", error);
-    return res.status(500).json({ message: "Unable to update salary." });
-  }
-});
-
+// /* ==================== SALARY APPROVAL ====================
+//    Employee/Intern salary: HR or Admin may review/finalize.
+//    HR/Admin salary: CEO has final approval authority.
+//    CEO salary: not generated by the monthly payroll job. */
+// router.put("/salary/:id/approval", auth, async (req, res) => {
+//   try {
+//     const salaryId = Number(req.params.id);
+//     if (!Number.isInteger(salaryId)) {
+//       return res.status(400).json({ message: "Invalid salary ID" });
+//     }
+//
+//     const { action = "approve" } = req.body || {};
+//     const current = await q(
+//       `SELECT s.*, u.role AS employee_role, u.full_name
+//        FROM salary_records s
+//        JOIN users u ON u.id = s.user_id
+//        WHERE s.id = $1`,
+//       [salaryId]
+//     );
+//
+//     if (!current[0]) {
+//       return res.status(404).json({ message: "Salary record not found" });
+//     }
+//
+//     const salary = current[0];
+//     const actor = String(req.user.role || "").toUpperCase();
+//     const targetRole = String(salary.employee_role || "").toUpperCase();
+//     const managementSalary = ["ADMIN", "HR"].includes(targetRole);
+//
+//     if (action === "review") {
+//       if (managementSalary) {
+//         return res.status(403).json({ message: "HR/Admin salary requires CEO approval" });
+//       }
+//       if (!["HR", "ADMIN", "CEO"].includes(actor)) {
+//         return res.status(403).json({ message: "Only HR/Admin/CEO can review employee salary" });
+//       }
+//       const rows = await q(
+//         `UPDATE salary_records
+//          SET status = 'Reviewed', reviewed_by = $1, reviewed_at = NOW()
+//          WHERE id = $2 AND status IN ('Pending Review', 'Reviewed')
+//          RETURNING *`,
+//         [req.user.id, salaryId]
+//       );
+//       if (!rows[0]) return res.status(409).json({ message: "Salary cannot be reviewed in its current state" });
+//       return res.json({ ...rows[0], message: "Salary marked as reviewed." });
+//     }
+//
+//     if (action === "send_back") {
+//       if (managementSalary && actor !== "CEO") {
+//         return res.status(403).json({ message: "Only CEO can send back Admin/HR salary" });
+//       }
+//       if (!managementSalary && !["HR", "ADMIN", "CEO"].includes(actor)) {
+//         return res.status(403).json({ message: "Only HR/Admin/CEO can send salary back" });
+//       }
+//       const rows = await q(
+//         `UPDATE salary_records
+//          SET status = 'Pending Review', reviewed_by = NULL, reviewed_at = NULL,
+//              processed_by = NULL, processed_at = NULL
+//          WHERE id = $1
+//          RETURNING *`,
+//         [salaryId]
+//       );
+//       return res.json({ ...rows[0], message: "Salary sent back for review." });
+//     }
+//
+//     if (managementSalary) {
+//       if (actor !== "CEO") {
+//         return res.status(403).json({ message: "CEO approval is required for Admin/HR salary" });
+//       }
+//     } else if (!["HR", "ADMIN", "CEO"].includes(actor)) {
+//       return res.status(403).json({ message: "Only HR/Admin/CEO can approve employee salary" });
+//     }
+//
+//     const rows = await q(
+//       `UPDATE salary_records
+//        SET status = 'Processed',
+//            reviewed_by = COALESCE(reviewed_by, $1),
+//            reviewed_at = COALESCE(reviewed_at, NOW()),
+//            approved_by = $1,
+//            approved_at = NOW(),
+//            processed_by = $1,
+//            processed_at = NOW()
+//        WHERE id = $2 AND status IN ('Pending Review', 'Reviewed')
+//        RETURNING *`,
+//       [req.user.id, salaryId]
+//     );
+//     if (!rows[0]) return res.status(409).json({ message: "Salary is already processed or unavailable" });
+//
+//     // Notify the salary recipient.
+//     await q(
+//       `INSERT INTO notifications (user_id, title, body)
+//        VALUES ($1, $2, $3)`,
+//       [salary.user_id, "Salary Processed", `Your ${salary.month} salary has been processed.`]
+//     );
+//
+//     return res.json({ ...rows[0], message: "Salary processed successfully." });
+//   } catch (error) {
+//     console.error("SALARY APPROVAL ERROR:", error);
+//     return res.status(500).json({ message: "Unable to update salary." });
+//   }
+// });
+//
 module.exports = router;
+
+//    Salary approval is intentionally disabled.
+

@@ -1,7 +1,5 @@
-import React, { useEffect, useRef, useState } from "react";
-import * as I from "lucide-react";
-import { api, getToken, setToken, clearToken } from "../api";
-import { normalizeRole, all } from "../utils/navigation";
+import { useEffect, useState } from "react";
+import { api } from "../api";
 
 import List from "./List";
 function ActivityLogs() {
@@ -10,7 +8,20 @@ function ActivityLogs() {
 
   useEffect(() => {
     api("/api/activity")
-      .then((result) => setRows(Array.isArray(result) ? result : []))
+      .then((result) => {
+        const data = Array.isArray(result) ? result : [];
+        // Always show currently active sessions first, then newest logged-out sessions.
+        data.sort((a, b) => {
+          const aActive = a.logout_at == null;
+          const bActive = b.logout_at == null;
+          if (aActive !== bActive) return aActive ? -1 : 1;
+
+          const aTime = new Date(a.login_at).getTime();
+          const bTime = new Date(b.login_at).getTime();
+          return bTime - aTime;
+        });
+        setRows(data);
+      })
       .catch((err) => setMessage(err.message || "Unable to load activity."));
   }, []);
 

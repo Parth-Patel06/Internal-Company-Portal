@@ -1,0 +1,12 @@
+@media (max-width: 900px) {
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid { min-width: 0; }
+  .stats .card { min-width: 0; }
+}
+@media (max-width: 600px) {
+  .stats { grid-template-columns: 1fr; }
+  .dashboardTasks .moduleTop { align-items: stretch; flex-direction: column; }
+  .taskGrid { grid-template-columns: 1fr; }
+  .taskCardTop { flex-wrap: wrap; }
+  .taskProgressControl { flex-wrap: wrap; }
+}
